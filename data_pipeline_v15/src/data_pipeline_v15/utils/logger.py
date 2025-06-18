@@ -25,7 +25,7 @@ class Logger:
         :type log_file_path: str
         """
         self.log_file_path = log_file_path
-        # Clear existing handlers
+        # 清除已存在的處理器
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
 

@@ -1,10 +1,10 @@
 import hashlib
 import json
 import os
-from typing import TYPE_CHECKING, Set, Union, Iterable # Added for type hints
+from typing import TYPE_CHECKING, Set, Union, Iterable # 為類型提示而添加
 
 if TYPE_CHECKING:
-    from .utils.logger import Logger # For type hinting Logger
+    from .utils.logger import Logger # 用於 Logger 的類型提示
 
 
 class FileManifest:
@@ -121,9 +121,9 @@ class FileManifest:
             return sha256.hexdigest()
         except FileNotFoundError:
             return None
-        except IOError as e:  # Handle other potential IOErrors during read
+        except IOError as e:  # 處理讀取時其他潛在的 IOError
             # print(f"IOError while hashing file {file_path}: {e}")
-            # Logger could be used here if passed, or raise an error
+            # 如果傳入了 logger，可以在此處使用，或引發錯誤
             return None
 
     def has_been_processed(self, file_hash: str) -> bool:
@@ -145,9 +145,9 @@ class FileManifest:
         :param hashes_to_add: 一個包含要添加的檔案雜湊值的字串，或可迭代物件 (例如列表或集合)。
         :type hashes_to_add: str or collections.abc.Iterable[str]
         """
-        # Ensure hashes_to_add is iterable, even if it's a single hash string
+        # 確保 hashes_to_add 是可迭代的，即使它只是一個雜湊字串
         if isinstance(hashes_to_add, str):
             self.processed_hashes.add(hashes_to_add)
-        else:  # Assuming it's an iterable (list, set)
+        else:  # 假設它是一個可迭代物件 (例如列表、集合)
             self.processed_hashes.update(hashes_to_add)
         self._save()
