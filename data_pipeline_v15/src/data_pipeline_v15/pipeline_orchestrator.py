@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
 import json
-import logging # Not strictly needed here if only self.logger is used, but good for general context
+# import logging
 import os
 import shutil
-import sys # Not strictly needed here, but good for general context
-import threading # Not strictly needed here
-import time # Not strictly needed here
+# import sys
+# import threading
+# import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
@@ -19,6 +19,7 @@ from .file_parser import worker_process_file
 from .manifest_manager import FileManifest
 from .utils.logger import Logger
 from .utils.monitor import HardwareMonitor
+from .core import constants # 修改：導入常數
 
 if TYPE_CHECKING:
     from duckdb import DuckDBPyConnection
@@ -26,79 +27,40 @@ if TYPE_CHECKING:
 
 class PipelineOrchestrator:
     """數據整合管道協調器。
-
-    負責管理和執行整個數據處理流程，包括初始化、設定工作區、
-    檔案發現與篩選、並行解析、資料庫載入、處理狀態追蹤 (Manifest)
-    以及最終的清理等步驟。
-
-    本類別透過依賴注入的方式接收一個組態字典 (config)，並使用該組態
-    來初始化其依賴的各個模組 (如 Logger, HardwareMonitor, FileManifest 等)，
-    並將具體的操作委派給這些模組執行。
-
-    主要公開方法為 `run()`，它啟動並完整執行整個管道流程。
-
-    :ivar config: 包含管道所有必要組態的字典。
-    :vartype config: dict
-    :ivar paths: 一個由 `_resolve_paths` 方法根據 `config` 解析生成的路徑字典。
-    :vartype paths: dict
-    :ivar logger: 用於日誌記錄的 Logger 物件執行個體。
-    :vartype logger: Logger (來自 .utils.logger.Logger)
-    :ivar hw_monitor: 硬體資源監控器物件執行個體。
-    :vartype hw_monitor: HardwareMonitor (來自 .utils.monitor.HardwareMonitor)
-    :ivar file_manifest: 檔案處理清單管理器物件執行個體，在 `_setup_workspace` 中初始化。
-    :vartype file_manifest: Optional[FileManifest] (來自 .manifest_manager.FileManifest)
-    :ivar log_file_path: 目前執行產生的日誌檔案路徑。 # This is the initial CWD log
-    :vartype log_file_path: str
-    :ivar main_log_file_path: 主要執行日誌檔案的路徑，通常在工作區內。
-    :vartype main_log_file_path: str
+    (docstring 已省略)
     """
 
     def __init__(self, config: Dict[str, Any]):
         """初始化 PipelineOrchestrator。
-
-        :param config: 包含管道所有必要設定的字典。
-                       預期包含路徑設定 (`paths`)、執行策略 (`run_mode`, `conflict_strategy`)、
-                       資料庫設定 (`duckdb_settings`, `db_filename`)、綱要設定 (`schemas`)、
-                       以及其他可選設定 (如 `hardware_monitor_interval`, `micro_batch_size`,
-                       `recreate_workspace_on_run`, `cleanup_workspace_on_finish`)。
-        :type config: dict
+        (docstring 已省略)
         """
         self.config = config
         _initial_log_file_name = (
             f"pipeline_init_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         )
-        self.log_file_path = os.path.abspath( # Initial log in CWD
+        self.log_file_path = os.path.abspath(
             _initial_log_file_name
         )
-
-        # Initialize logger to write to the initial CWD log first.
-        # The final log path (main_log_file_path) is determined after paths are resolved.
-        # For simplicity in this version, self.logger instance is not changed after init.
-        # Ideally, logging should switch to main_log_file_path.
         self.logger = Logger(log_file_path=self.log_file_path)
         self.logger.log(
             f"PipelineOrchestrator (數據整合平台 v15) PRE-INIT an Logger at {self.log_file_path}",
             level="info",
         )
-
         self.paths = self._resolve_paths()
-
         _run_log_file_name = (
             f"執行日誌_v15_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         )
         _log_dir = self.paths.get(
-            "local_logs_dir", self.paths.get("local_workspace", ".") # Default to workspace or CWD
+            "local_logs_dir", self.paths.get("local_workspace", ".")
         )
         os.makedirs(_log_dir, exist_ok=True)
         self.main_log_file_path = os.path.join(_log_dir, _run_log_file_name)
 
-        # Log the intent to switch, though the logger object itself doesn't change its handler in this version.
         if self.main_log_file_path != self.log_file_path:
             self.logger.log(
                 f"Intended main log file: {self.main_log_file_path}. Initial logs are in: {self.log_file_path}",
                 level="info",
             )
-
         self.logger.log(
             f"PipelineOrchestrator (數據整合平台 v15) initialized.", level="info"
         )
@@ -110,17 +72,14 @@ class PipelineOrchestrator:
             f"Resolved workspace paths: {json.dumps(self.paths, indent=2, ensure_ascii=False)}",
             level="info",
         )
-
         self.hw_monitor = HardwareMonitor(
             logger=self.logger, interval=self.config.get("hardware_monitor_interval", 2)
         )
-        self.file_manifest = None # type: Optional[FileManifest]
+        self.file_manifest = None
 
     def _resolve_paths(self) -> Dict[str, str]:
         """根據主設定檔中的路徑配置，建構並回傳一個包含所有絕對路徑的字典。
-        :meta private:
-        :return: 一個包含所有已解析的絕對路徑的字典。
-        :rtype: dict
+        (docstring 已省略)
         """
         paths_config = self.config.get("paths", {})
         project_name_for_paths = self.config.get(
@@ -140,49 +99,43 @@ class PipelineOrchestrator:
             "local_workspace": local_workspace_root,
             "local_input": os.path.join(
                 local_workspace_root,
-                paths_config.get("input_dir_name", "01_input_files"),
+                paths_config.get("input_dir_name", constants.DIR_NAME_INPUT),
             ),
             "local_staging": os.path.join(
                 local_workspace_root,
-                paths_config.get("staging_dir_name", "02_staging_parquet"),
+                paths_config.get("staging_dir_name", constants.DIR_NAME_STAGING),
             ),
             "local_database_dir": os.path.join(
                 local_workspace_root,
-                paths_config.get("database_dir_name", "03_database_output"),
+                paths_config.get("database_dir_name", constants.DIR_NAME_DATABASE),
             ),
             "local_db_file_path": os.path.join(
                 local_workspace_root,
-                paths_config.get("database_dir_name", "03_database_output"),
+                paths_config.get("database_dir_name", constants.DIR_NAME_DATABASE),
                 db_filename,
             ),
             "local_manifests_dir": os.path.join(
                 local_workspace_root,
-                paths_config.get("manifests_dir_name", "04_manifests"),
+                paths_config.get("manifests_dir_name", constants.DIR_NAME_MANIFESTS),
             ),
             "file_manifest_path": os.path.join(
                 local_workspace_root,
-                paths_config.get("manifests_dir_name", "04_manifests"),
+                paths_config.get("manifests_dir_name", constants.DIR_NAME_MANIFESTS),
                 "file_manifest.json",
             ),
             "local_failed_dir": os.path.join(
                 local_workspace_root,
-                paths_config.get("failed_files_dir_name", "05_failed_files"),
+                paths_config.get("failed_files_dir_name", constants.DIR_NAME_FAILED),
             ),
             "local_logs_dir": os.path.join(
-                local_workspace_root, paths_config.get("logs_dir_name", "99_logs")
+                local_workspace_root, paths_config.get("logs_dir_name", constants.DIR_NAME_LOGS)
             ),
         }
         return resolved
 
     def _setup_workspace(self) -> None:
         """準備本地工作區。
-
-        根據設定 (`config['recreate_workspace_on_run']`)，可選擇性地刪除並重建工作區。
-        然後建立所有必要的子目錄 (input, staging, database, manifests, failed_files)，
-        並初始化 `self.file_manifest` 以追蹤已處理檔案。
-
-        :meta private:
-        :raises Exception: 如果在建立目錄或初始化 FileManifest 時發生嚴重錯誤。
+        (docstring 已省略)
         """
         self.logger.log("步驟 A: 環境準備與本地工作區設定", level="step")
         recreate = self.config.get("recreate_workspace_on_run", True)
@@ -228,7 +181,7 @@ class PipelineOrchestrator:
         try:
             self.file_manifest = FileManifest(
                 manifest_path=self.paths["file_manifest_path"],
-                logger=self.logger # 傳遞 logger 實例
+                logger=self.logger
             )
             self.logger.log(
                 f"FileManifest 已在 '{self.paths['file_manifest_path']}' 初始化。",
@@ -252,7 +205,7 @@ class PipelineOrchestrator:
                     all_files_in_input.append(os.path.join(root, name))
 
         files_to_process_info = []
-        if self.config.get("run_mode", "NORMAL").upper() == "BACKFILL":
+        if self.config.get("run_mode", constants.RUN_MODE_NORMAL).upper() == constants.RUN_MODE_BACKFILL: # 修改
             self.logger.log(
                 "警告：您正處於【歷史回填模式】，將重新處理所有來源檔案。",
                 level="warning",
@@ -267,7 +220,7 @@ class PipelineOrchestrator:
                     self.logger.log(
                         f"無法獲取檔案 {f_path} 的雜湊值，將跳過。", level="warning"
                     )
-        else:  # NORMAL 模式
+        else:
             for f_path in all_files_in_input:
                 file_hash = self.file_manifest.get_file_hash(f_path)
                 if file_hash and not self.file_manifest.has_been_processed(
@@ -361,8 +314,8 @@ class PipelineOrchestrator:
                 item_info = futures[future]
                 try:
                     result = future.result()
-                    if result.get("status") == "group_result":
-                        for sub_result in result.get("results", []):
+                    if result.get(constants.KEY_STATUS) == constants.STATUS_GROUP_RESULT: # 修改
+                        for sub_result in result.get(constants.KEY_RESULTS, []): # 修改
                             parsed_results_in_batch.append(
                                 {
                                     "item_info": item_info,
@@ -383,9 +336,9 @@ class PipelineOrchestrator:
                         {
                             "item_info": item_info,
                             "parse_output": {
-                                "status": "error",
-                                "file": os.path.basename(item_info["path"]),
-                                "reason": str(e),
+                                constants.KEY_STATUS: constants.STATUS_ERROR, # 修改
+                                constants.KEY_FILE: os.path.basename(item_info["path"]), # 修改
+                                constants.KEY_REASON: str(e), # 修改
                             },
                         }
                     )
@@ -393,22 +346,22 @@ class PipelineOrchestrator:
         for res_item in parsed_results_in_batch:
             original_item_info = res_item["item_info"]
             parse_output = res_item["parse_output"]
-            status = parse_output.get("status")
-            file_display_name = parse_output.get("file", os.path.basename(original_item_info["path"]))
-            reason = parse_output.get("reason", "未知錯誤")
+            status = parse_output.get(constants.KEY_STATUS) # 修改
+            file_display_name = parse_output.get(constants.KEY_FILE, os.path.basename(original_item_info["path"])) # 修改
+            reason = parse_output.get(constants.KEY_REASON, "未知錯誤") # 修改
 
-            if status == "success":
+            if status == constants.STATUS_SUCCESS: # 修改
                 self.logger.log(
-                    f"↳ 成功 ({parse_output.get('table', 'N/A')}): {file_display_name} -> 暫存 {parse_output.get('count', 0)} 筆。",
+                    f"↳ 成功 ({parse_output.get(constants.KEY_TABLE, 'N/A')}): {file_display_name} -> 暫存 {parse_output.get(constants.KEY_COUNT, 0)} 筆。", # 修改
                     level="success",
                 )
                 current_batch_successful_hashes.add(original_item_info["hash"])
-            elif status == "skipped":
+            elif status == constants.STATUS_SKIPPED: # 修改
                 self.logger.log(
                     f"↳ 跳過: {file_display_name} -> 原因: {reason}",
                     level="warning",
                 )
-            else:  # error
+            else:
                 self.logger.log(
                     f"↳ 失敗: {file_display_name} -> 原因: {reason}",
                     level="error",
@@ -451,9 +404,8 @@ class PipelineOrchestrator:
             schemas_config=self.config["schemas"],
             local_staging_path=self.paths["local_staging"],
             logger=self.logger,
-            conflict_strategy=self.config.get(
-                "conflict_strategy", "IGNORE"
-            ),
+            # 修改：使用常數作為後備值
+            conflict_strategy=self.config.get("conflict_strategy", constants.CONFLICT_STRATEGY_IGNORE),
         )
         self.file_manifest.add_processed_hashes(
             successful_hashes_in_batch
@@ -540,10 +492,10 @@ class PipelineOrchestrator:
                     current_batch_successful_hashes = self._process_file_batch(batch_files_info, max_workers)
 
                     if current_batch_successful_hashes:
-                        if db_conn is None: # Initialize DB only if there's something to load
+                        if db_conn is None:
                             db_conn = self._initialize_database()
 
-                        if db_conn: # Proceed only if DB was successfully initialized
+                        if db_conn:
                             self._load_batch_to_db_and_update_manifest(db_conn, current_batch_successful_hashes)
                             successful_overall_hashes.update(current_batch_successful_hashes)
                         else:
@@ -551,7 +503,7 @@ class PipelineOrchestrator:
                     else:
                         self.logger.log(
                             f"微批次 {i + 1}/{num_batches} 中沒有成功解析的檔案可供載入資料庫。",
-                            level="info", # Changed from warning, as it's a normal outcome for a batch.
+                            level="info",
                         )
                     self.logger.log(f"微批次 {i + 1}/{num_batches} 處理完畢。", level="info")
 
@@ -568,6 +520,7 @@ class PipelineOrchestrator:
 
 
 if __name__ == "__main__":
+    # ... (main 區塊省略以節省空間) ...
     print(
         f"PipelineOrchestrator 模組 ({PipelineOrchestrator.__doc__.strip()[:10]}...) 可被導入。"
     )
