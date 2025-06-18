@@ -6,7 +6,7 @@
 
 主要功能包括：
 - 解析 --project_name, --run_mode, --conflict_strategy, --workspace_path 等參數。
-- 根據參數及內建預設值 (如 schemas, duckdb_settings) 建構傳遞給 Orchestrator 的 config。
+- 根據參數及設定檔 (schemas.json) 建構傳遞給 Orchestrator 的 config。
 - 實例化 PipelineOrchestrator 並呼叫其 run() 方法。
 
 執行範例 (假設已安裝 Poetry 並在專案根目錄):
@@ -16,7 +16,9 @@
 
 import argparse
 import os
-import json  # 用於預設的 schemas (雖然此版本直接定義) 及 config 輸出 (若需要)
+import json # 用於載入 schemas.json 及 config 輸出 (若需要)
+from pathlib import Path # 用於處理檔案路徑
+import sys # 用於錯誤輸出 exit
 from src.data_pipeline_v15.pipeline_orchestrator import PipelineOrchestrator
 
 
@@ -93,61 +95,24 @@ def build_config_from_args(args: argparse.Namespace) -> dict:
             os.path.join(".", f"{project_name}_workspace_v15")
         )
 
-    default_schemas = {
-        "weekly_report": {
-            "keywords": ["weekly_fut", "weekly_opt", "opendata"],
-            "db_table_name": "fact_weekly_report",
-            "unique_key": ["trading_date", "product_name", "investor_type"],
-            "columns_map": {
-                "trading_date": {"db_type": "DATE", "aliases": ["日期", "交易日期"]},
-                "product_name": {"db_type": "VARCHAR", "aliases": ["商品名稱", "契約"]},
-                "investor_type": {"db_type": "VARCHAR", "aliases": ["身份別"]},
-                "long_pos_volume": {"db_type": "BIGINT", "aliases": ["多方交易口數"]},
-                "long_pos_value": {"db_type": "BIGINT", "aliases": ["多方交易金額"]},
-                "short_pos_volume": {"db_type": "BIGINT", "aliases": ["空方交易口數"]},
-                "short_pos_value": {"db_type": "BIGINT", "aliases": ["空方交易金額"]},
-            },
-        },
-        "default_daily": {
-            "keywords": [
-                "daily",
-                "optionsdaily",
-                "fut",
-                "opt",
-                "2021",
-                "2022",
-                "2023",
-                "2024",
-                "csv",
-                "delta",
-            ],
-            "db_table_name": "fact_daily_ohlc",
-            "unique_key": [
-                "trading_date",
-                "product_id",
-                "expiry_month",
-                "strike_price",
-                "option_type",
-            ],
-            "columns_map": {
-                "trading_date": {"db_type": "DATE", "aliases": ["交易日期", "日期"]},
-                "product_id": {"db_type": "VARCHAR", "aliases": ["契約", "商品代號"]},
-                "expiry_month": {"db_type": "VARCHAR", "aliases": ["到期月份(週別)"]},
-                "strike_price": {"db_type": "DOUBLE", "aliases": ["履約價"]},
-                "option_type": {"db_type": "VARCHAR", "aliases": ["買賣權"]},
-                "open": {"db_type": "DOUBLE", "aliases": ["開盤價"]},
-                "high": {"db_type": "DOUBLE", "aliases": ["最高價"]},
-                "low": {"db_type": "DOUBLE", "aliases": ["最低價"]},
-                "close": {"db_type": "DOUBLE", "aliases": ["收盤價"]},
-                "volume": {"db_type": "BIGINT", "aliases": ["成交量", "成交口數"]},
-                "open_interest": {
-                    "db_type": "BIGINT",
-                    "aliases": ["未沖銷契約量", "未沖銷契約數", "未沖銷口數"],
-                },
-                "delta": {"db_type": "DOUBLE", "aliases": ["delta"]},
-            },
-        },
-    }
+    # --- 移除舊的 default_schemas 定義 ---
+
+    # --- 新增從 JSON 檔案載入 schemas 的邏輯 ---
+    loaded_schemas = None
+    try:
+        # 假設 main.py 在 data_pipeline_v15/ 目錄下，
+        # config/schemas.json 在 data_pipeline_v15/config/schemas.json
+        schemas_file_path = Path(__file__).parent / 'config' / 'schemas.json'
+        with open(schemas_file_path, 'r', encoding='utf-8') as f:
+            loaded_schemas = json.load(f)
+        # 從外部檔案 config/schemas.json 成功載入資料綱要設定
+    except FileNotFoundError:
+        print(f"錯誤：資料綱要設定檔 {schemas_file_path} 未找到。", file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"錯誤：解析資料綱要設定檔 {schemas_file_path} 時發生錯誤：{e}", file=sys.stderr)
+        sys.exit(1)
+    # --- 結束載入 schemas 的邏輯 ---
 
     config = {
         "project_name": project_name,
@@ -173,7 +138,7 @@ def build_config_from_args(args: argparse.Namespace) -> dict:
                 os.environ.get("DUCKDB_THREADS", os.cpu_count() or 2)
             ),  # Ensure int
         },
-        "schemas": default_schemas,
+        "schemas": loaded_schemas, # 使用從檔案載入的 schemas
         "micro_batch_size": 20,
         "hardware_monitor_interval": 5,
         "recreate_workspace_on_run": True,

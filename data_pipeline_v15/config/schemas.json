@@ -1,0 +1,162 @@
+{
+    "weekly_report": {
+        "keywords": [
+            "weekly_fut",
+            "weekly_opt",
+            "opendata"
+        ],
+        "db_table_name": "fact_weekly_report",
+        "unique_key": [
+            "trading_date",
+            "product_name",
+            "investor_type"
+        ],
+        "columns_map": {
+            "trading_date": {
+                "db_type": "DATE",
+                "aliases": [
+                    "日期",
+                    "交易日期"
+                ]
+            },
+            "product_name": {
+                "db_type": "VARCHAR",
+                "aliases": [
+                    "商品名稱",
+                    "契約"
+                ]
+            },
+            "investor_type": {
+                "db_type": "VARCHAR",
+                "aliases": [
+                    "身份別"
+                ]
+            },
+            "long_pos_volume": {
+                "db_type": "BIGINT",
+                "aliases": [
+                    "多方交易口數"
+                ]
+            },
+            "long_pos_value": {
+                "db_type": "BIGINT",
+                "aliases": [
+                    "多方交易金額"
+                ]
+            },
+            "short_pos_volume": {
+                "db_type": "BIGINT",
+                "aliases": [
+                    "空方交易口數"
+                ]
+            },
+            "short_pos_value": {
+                "db_type": "BIGINT",
+                "aliases": [
+                    "空方交易金額"
+                ]
+            }
+        }
+    },
+    "default_daily": {
+        "keywords": [
+            "daily",
+            "optionsdaily",
+            "fut",
+            "opt",
+            "2021",
+            "2022",
+            "2023",
+            "2024",
+            "csv",
+            "delta"
+        ],
+        "db_table_name": "fact_daily_ohlc",
+        "unique_key": [
+            "trading_date",
+            "product_id",
+            "expiry_month",
+            "strike_price",
+            "option_type"
+        ],
+        "columns_map": {
+            "trading_date": {
+                "db_type": "DATE",
+                "aliases": [
+                    "交易日期",
+                    "日期"
+                ]
+            },
+            "product_id": {
+                "db_type": "VARCHAR",
+                "aliases": [
+                    "契約",
+                    "商品代號"
+                ]
+            },
+            "expiry_month": {
+                "db_type": "VARCHAR",
+                "aliases": [
+                    "到期月份(週別)"
+                ]
+            },
+            "strike_price": {
+                "db_type": "DOUBLE",
+                "aliases": [
+                    "履約價"
+                ]
+            },
+            "option_type": {
+                "db_type": "VARCHAR",
+                "aliases": [
+                    "買賣權"
+                ]
+            },
+            "open": {
+                "db_type": "DOUBLE",
+                "aliases": [
+                    "開盤價"
+                ]
+            },
+            "high": {
+                "db_type": "DOUBLE",
+                "aliases": [
+                    "最高價"
+                ]
+            },
+            "low": {
+                "db_type": "DOUBLE",
+                "aliases": [
+                    "最低價"
+                ]
+            },
+            "close": {
+                "db_type": "DOUBLE",
+                "aliases": [
+                    "收盤價"
+                ]
+            },
+            "volume": {
+                "db_type": "BIGINT",
+                "aliases": [
+                    "成交量",
+                    "成交口數"
+                ]
+            },
+            "open_interest": {
+                "db_type": "BIGINT",
+                "aliases": [
+                    "未沖銷契約量",
+                    "未沖銷契約數",
+                    "未沖銷口數"
+                ]
+            },
+            "delta": {
+                "db_type": "DOUBLE",
+                "aliases": [
+                    "delta"
+                ]
+            }
+        }
+    }
+}
