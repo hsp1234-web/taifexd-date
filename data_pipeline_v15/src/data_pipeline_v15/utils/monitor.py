@@ -18,25 +18,25 @@ class HardwareMonitor:
                 cpu = psutil.cpu_percent()
                 mem = psutil.virtual_memory()
                 disk = psutil.disk_usage("/")
-                # Ensure the status message is printed on a single line and then cleared
-                # The \r (carriage return) moves the cursor to the beginning of the line
-                status = f"⏱️  CPU: {cpu:5.1f}% | RAM: {mem.percent:5.1f}% ({mem.used/1024**3:.2f}/{mem.total/1024**3:.2f} GB) | Disk: {disk.percent:5.1f}% \r"
+                # 確保狀態訊息打印在單行然後被清除
+                # \r (歸位字元) 將游標移至行首
+                status = f"⏱️  中央處理器: {cpu:5.1f}% | 記憶體: {mem.percent:5.1f}% ({mem.used/1024**3:.2f}/{mem.total/1024**3:.2f} GB) | 磁碟: {disk.percent:5.1f}% \r"
                 print(status, end="")
-                # Flush stdout to ensure it's printed immediately, especially if run in some environments
-                # sys.stdout.flush() # Requires import sys, consider if needed based on logger behavior
+                # 強制刷新 stdout 以確保即時打印，尤其在某些執行環境中
+                # sys.stdout.flush() # 需要 import sys，根據 logger 行為考慮是否必要
 
-                # Wait for the specified interval or until the stop event is set
+                # 等待指定的時間間隔或直到停止事件被設定
                 self._stop_event.wait(timeout=self._interval)
             except Exception as e:
-                # Optionally log the exception if the logger is available and it's desirable
+                # 可選：如果 logger 可用且期望記錄，則記錄例外
                 # self.logger.log(f"Error in monitor thread: {e}", "error")
-                pass  # Silently continue or handle error
+                pass  # 靜默繼續或處理錯誤
 
     def start(self):
         """Starts the hardware monitoring thread."""
         if (
             not self._thread or not self._thread.is_alive()
-        ):  # Check if thread is alive too
+        ):  # 同時檢查執行緒是否存活
             self.logger.log("啟動高頻率即時硬體監控...", "info")
             self._stop_event.clear()
             self._thread = threading.Thread(target=self._monitor, daemon=True)
@@ -50,13 +50,13 @@ class HardwareMonitor:
             self._stop_event.set()
             self._thread.join(
                 timeout=self._interval + 0.5
-            )  # Give a bit more time for thread to join
-            # Clear the line where status was printed
-            # Ensure it's long enough to cover the previous status message
+            )  # 給予執行緒多一點時間來結束
+            # 清除先前打印狀態訊息的該行
+            # 確保長度足以覆蓋先前的狀態訊息
             print(
                 "\r" + " " * 100 + "\r", end=""
-            )  # Carriage return, spaces, carriage return again
-            # sys.stdout.flush() # if using sys.stdout.flush() in _monitor
+            )  # 歸位字元、空格、再次歸位字元
+            # sys.stdout.flush() # 如果在 _monitor 中使用了 sys.stdout.flush()
             self.logger.log("停止高頻率即時硬體監控...", "info")
             self._thread = None
         else:
@@ -106,25 +106,25 @@ class HardwareMonitor:
         這個方法會在一個獨立的執行緒中執行，直到 _stop_event 被設定。
         它會捕捉所有預期的例外，以避免執行緒意外終止。
         """
-        """Internal method to monitor hardware resources."""
+        # """Internal method to monitor hardware resources.""" # 此為英文 docstring，但已由上方中文 docstring 取代
         while not self._stop_event.is_set():
             try:
                 cpu = psutil.cpu_percent()
                 mem = psutil.virtual_memory()
                 disk = psutil.disk_usage("/")
-                # Ensure the status message is printed on a single line and then cleared
-                # The \r (carriage return) moves the cursor to the beginning of the line
-                status = f"⏱️  CPU: {cpu:5.1f}% | RAM: {mem.percent:5.1f}% ({mem.used/1024**3:.2f}/{mem.total/1024**3:.2f} GB) | Disk: {disk.percent:5.1f}% \r"
+                # 確保狀態訊息打印在單行然後被清除
+                # \r (歸位字元) 將游標移至行首
+                status = f"⏱️  中央處理器: {cpu:5.1f}% | 記憶體: {mem.percent:5.1f}% ({mem.used/1024**3:.2f}/{mem.total/1024**3:.2f} GB) | 磁碟: {disk.percent:5.1f}% \r"
                 print(status, end="")
-                # Flush stdout to ensure it's printed immediately, especially if run in some environments
-                # sys.stdout.flush() # Requires import sys, consider if needed based on logger behavior
+                # 強制刷新 stdout 以確保即時打印，尤其在某些執行環境中
+                # sys.stdout.flush() # 需要 import sys，根據 logger 行為考慮是否必要
 
-                # Wait for the specified interval or until the stop event is set
+                # 等待指定的時間間隔或直到停止事件被設定
                 self._stop_event.wait(timeout=self._interval)
             except Exception as e:
-                # Optionally log the exception if the logger is available and it's desirable
+                # 可選：如果 logger 可用且期望記錄，則記錄例外
                 # self.logger.log(f"Error in monitor thread: {e}", "error")
-                pass  # Silently continue or handle error
+                pass  # 靜默繼續或處理錯誤
 
     def start(self):
         """啟動背景硬體監控執行緒。
@@ -132,10 +132,10 @@ class HardwareMonitor:
         如果監控執行緒尚未啟動或已停止，此方法會初始化並啟動一個新的 daemon 執行緒
         來執行 _monitor 方法。會使用 Logger 記錄啟動訊息。
         """
-        """Starts the hardware monitoring thread."""
+        # """Starts the hardware monitoring thread.""" # 此為英文 docstring，但已由上方中文 docstring 取代
         if (
             not self._thread or not self._thread.is_alive()
-        ):  # Check if thread is alive too
+        ):  # 同時檢查執行緒是否存活
             self.logger.log("啟動高頻率即時硬體監控...", "info")
             self._stop_event.clear()
             self._thread = threading.Thread(target=self._monitor, daemon=True)
@@ -154,13 +154,13 @@ class HardwareMonitor:
             self._stop_event.set()
             self._thread.join(
                 timeout=self._interval + 0.5
-            )  # Give a bit more time for thread to join
-            # Clear the line where status was printed
-            # Ensure it's long enough to cover the previous status message
+            )  # 給予執行緒多一點時間來結束
+            # 清除先前打印狀態訊息的該行
+            # 確保長度足以覆蓋先前的狀態訊息
             print(
                 "\r" + " " * 100 + "\r", end=""
-            )  # Carriage return, spaces, carriage return again
-            # sys.stdout.flush() # if using sys.stdout.flush() in _monitor
+            )  # 歸位字元、空格、再次歸位字元
+            # sys.stdout.flush() # 如果在 _monitor 中使用了 sys.stdout.flush()
             self.logger.log("停止高頻率即時硬體監控...", "info")
             self._thread = None
         else:

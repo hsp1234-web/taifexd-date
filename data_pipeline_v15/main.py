@@ -59,7 +59,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--workspace_path",
         type=str,
-        default=None,  # Default is None, handled in build_config_from_args
+        default=None,  # 預設為 None，在 build_config_from_args 中處理
         help="指定本地工作區的根路徑。若未提供，則預設在當前目錄下，以專案名稱加上 '_workspace_v15' 後綴建立資料夾。",
     )
     args = parser.parse_args()

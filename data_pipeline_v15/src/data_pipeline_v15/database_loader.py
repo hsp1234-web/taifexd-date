@@ -9,16 +9,16 @@ from .utils.logger import Logger
 if TYPE_CHECKING:
     from duckdb import DuckDBPyConnection
 
-# Note: os, shutil, traceback are already imported above and should not be duplicated.
-# The original script in A029 was intended to organize this, but resulted in duplicates.
-# This cleanup removes the duplicates and the old commented-out type hints.
+# 注意：os, shutil, traceback 已在上方匯入，不應重複。
+# A029 中的原始腳本旨在組織此部分，但導致了重複。
+# 此清理移除了重複項和舊的註解掉的類型提示。
 
 
 def load_staging_to_database(
-    db_conn,  # type: DuckDBPyConnection (actual type hint if using TYPE_CHECKING)
+    db_conn,  # type: DuckDBPyConnection (若使用 TYPE_CHECKING，此為實際類型提示)
     schemas_config: dict,
     local_staging_path: str,
-    logger,  # type: Logger (actual type hint if using TYPE_CHECKING)
+    logger,  # type: Logger (若使用 TYPE_CHECKING，此為實際類型提示)
     conflict_strategy: str,
 ) -> None:
     """將指定暫存區 (staging) 的 Parquet 檔案載入到 DuckDB 資料庫中。
@@ -80,7 +80,7 @@ def load_staging_to_database(
             )
             continue
 
-        # Ensure table_name is quoted to handle potential special characters or case sensitivity in SQL
+        # 確保 table_name 被引號括起來，以處理 SQL 中潛在的特殊字元或大小寫敏感性
         quoted_table_name = f'"{table_name}"'
 
         parquet_files = [
@@ -100,24 +100,24 @@ def load_staging_to_database(
 
         parquet_glob_path = os.path.join(schema_staging_path, "*.parquet").replace(
             "\\", "/"
-        )  # Ensure forward slashes for DuckDB path
+        )  # 確保 DuckDB 路徑使用正斜線
 
         try:
-            # Ensure column names from schema_def["columns_map"] are quoted
+            # 確保 schema_def["columns_map"] 中的欄位名稱被引號括起來
             db_cols_list = [f'"{c}"' for c in schema_def["columns_map"].keys()]
 
-            # Columns for the SELECT part from read_parquet (must match Parquet file columns)
-            # These are already defined by schema_def["columns_map"].keys()
+            # 從 read_parquet 讀取 SELECT 部分的欄位 (必須與 Parquet 檔案欄位相符)
+            # 這些已由 schema_def["columns_map"].keys() 定義
             select_cols_from_parquet_str = ", ".join(db_cols_list)
 
-            # Columns for the INSERT INTO part (includes "id" + columns from Parquet)
+            # INSERT INTO 部分的欄位 (包含 "id" 以及來自 Parquet 的欄位)
             insert_cols_str = f'"id", {select_cols_from_parquet_str}'
 
-            # Sequence name, also quoted
+            # 序列名稱，同樣加上引號
             quoted_seq_name = f'"seq_{table_name}"'
             db_conn.execute(f"CREATE SEQUENCE IF NOT EXISTS {quoted_seq_name};")
 
-            conflict_clause = "ON CONFLICT DO NOTHING"  # Default for "IGNORE"
+            conflict_clause = "ON CONFLICT DO NOTHING"  # "IGNORE" 的預設行為
             if conflict_strategy.upper() == "REPLACE" and schema_def.get("unique_key"):
                 unique_key_list = [f'"{k}"' for k in schema_def["unique_key"]]
                 unique_key_str = ", ".join(unique_key_list)
@@ -130,13 +130,13 @@ def load_staging_to_database(
                     f"ON CONFLICT ({unique_key_str}) DO UPDATE SET {update_set_str}"
                 )
 
-            # The Parquet files are expected to have columns matching schema_def["columns_map"].keys()
-            # due to the reindex operation in the file_parser step.
-            # The SELECT clause for read_parquet should list these columns.
+            # 預期 Parquet 檔案的欄位會與 schema_def["columns_map"].keys() 相符
+            # 這是由於 file_parser 步驟中的 reindex 操作。
+            # read_parquet 的 SELECT 子句應列出這些欄位。
             sql_query = (
                 f"INSERT INTO {quoted_table_name} ({insert_cols_str}) "
                 f"SELECT nextval({quoted_seq_name}), {select_cols_from_parquet_str} "
-                f"FROM read_parquet('{parquet_glob_path}', filename=false, hive_partitioning=false) "  # Added options for robustness
+                f"FROM read_parquet('{parquet_glob_path}', filename=false, hive_partitioning=false) "  # 為增強穩健性添加的選項
                 f"{conflict_clause};"
             )
 
@@ -163,9 +163,9 @@ def load_staging_to_database(
     try:
         if os.path.exists(local_staging_path):
             shutil.rmtree(local_staging_path)
-            # No need to os.makedirs(local_staging_path) if the expectation is just to clear it.
-            # If it needs to exist for subsequent runs in the same overall script execution, then recreate.
-            # Based on typical ETL, clearing is often enough. Let's assume it should be recreated for safety.
+            # 如果預期只是清除暫存區，則無需執行 os.makedirs(local_staging_path)。
+            # 如果在同一個整體腳本執行的後續運行中它需要存在，則重建。
+            # 根據典型的 ETL 流程，通常清除就足夠了。為安全起見，我們假設它應該被重建。
             os.makedirs(local_staging_path, exist_ok=True)
             logger.log(f"暫存區 '{local_staging_path}' 已清理並重建。", level="success")
     except Exception as e:
