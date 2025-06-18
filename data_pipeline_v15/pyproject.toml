@@ -9,6 +9,7 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "psutil (>=7.0.0,<8.0.0)"
 ]
 
 [tool.poetry]
@@ -17,6 +18,7 @@ packages = [{include = "data_pipeline_v15", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
+black = "^25.1.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
