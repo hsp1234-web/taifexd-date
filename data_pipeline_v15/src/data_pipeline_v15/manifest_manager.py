@@ -1,6 +1,10 @@
 import hashlib
 import json
 import os
+from typing import TYPE_CHECKING, Set, Union, Iterable # Added for type hints
+
+if TYPE_CHECKING:
+    from .utils.logger import Logger # For type hinting Logger
 
 
 class FileManifest:
@@ -18,67 +22,85 @@ class FileManifest:
 
     :ivar path: 清單檔案 (manifest file) 的路徑。
     :vartype path: str
+    :ivar logger: 用於記錄日誌的 Logger 物件執行個體。
+    :vartype logger: data_pipeline_v15.utils.logger.Logger
     :ivar processed_hashes: 一個包含所有已處理檔案雜湊值的集合。
     :vartype processed_hashes: set[str]
     """
 
-    def __init__(self, manifest_path):
+    def __init__(self, manifest_path: str, logger: 'Logger'):
         """初始化 FileManifest 物件。
 
-        在初始化時，會嘗試從指定的 `manifest_path` 載入已處理的雜<x_bin_5>。
+        在初始化時，會嘗試從指定的 `manifest_path` 載入已處理的雜湊值。
 
         :param manifest_path: 清單檔案的路徑。例如 'processed_files.json'。
         :type manifest_path: str
+        :param logger: 用於記錄日誌訊息的 Logger 物件執行個體。
+        :type logger: data_pipeline_v15.utils.logger.Logger
         """
         self.path = manifest_path
-        self.processed_hashes = self._load()
+        self.logger = logger # 儲存 logger 物件
+        self.processed_hashes: Set[str] = self._load()
 
-    def _load(self):
+    def _load(self) -> Set[str]:
         """從指定的路徑載入已處理的檔案雜湊值清單。
 
-        如果檔案不存在，或檔案內容不是有效的 JSON，或 JSON 中沒有 'hashes' 鍵，
-        則會回傳一個空集合。
+        如果檔案不存在，則返回空集合。
+        如果在讀取或解析現有檔案時發生任何錯誤，則會記錄錯誤並回傳一個空集合。
 
         :meta private:
         :return: 一個包含已處理檔案雜湊值的集合。
         :rtype: set[str]
         """
-        try:
-            if os.path.exists(self.path):
-                with open(self.path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    return set(data.get("hashes", []))
-        except (json.JSONDecodeError, IOError) as e:
-            # Optionally, log this error if a logger is available/passed
-            # print(f"Error loading manifest {self.path}: {e}")
-            pass
-        return set()
+        if not os.path.exists(self.path):
+            # 檔案不存在是預期情況（例如首次執行），返回空集合。
+            # self.logger.log(f"Manifest 檔案 '{self.path}' 不存在，將開始一個新的清單。", level="info") # 可選日誌
+            return set()
 
-    def _save(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # 從 'hashes' 鍵獲取列表，如果鍵不存在或其值不是列表（不太可能但防禦性），則data.get的結果可能是None或非列表
+                # set() 構造函數可以處理可迭代對象，包括空列表。如果data.get返回None，set(None)會拋錯。
+                # 因此，確保data.get的後備值是空列表[]
+                hashes_list = data.get("hashes", [])
+                if not isinstance(hashes_list, list):
+                    self.logger.log(f"Manifest 檔案 '{self.path}' 中的 'hashes' 鍵並非一個列表，已將其視為空清單。", level="warning")
+                    return set()
+                return set(hashes_list)
+        except Exception as e: # 捕捉讀取或解析現有檔案時的任何錯誤
+            self.logger.log(f"載入 Manifest 檔案 '{self.path}' 時發生錯誤: {e}", level="error")
+            return set() # 在發生錯誤時，保證返回空集合
+
+    def _save(self) -> None:
         """將目前已處理的檔案雜湊值集合儲存到清單檔案中。
 
         雜湊值會以 JSON 格式儲存，包含一個 'hashes' 鍵，其值為雜湊值列表。
         儲存前會確保目標目錄存在。為了方便閱讀和版本控制，
         JSON 檔案會以縮排格式儲存，並且雜湊值列表會先排序。
+        如果儲存過程中發生任何錯誤，錯誤將被記錄。
 
         :meta private:
         """
         try:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            manifest_dir = os.path.dirname(self.path)
+            if not manifest_dir: # 處理 self.path 僅為檔名的情況
+                manifest_dir = "."
+            os.makedirs(manifest_dir, exist_ok=True)
+
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(
                     {"hashes": sorted(list(self.processed_hashes))},
                     f,
                     indent=2,
                     ensure_ascii=False,
-                )  # Added sorted for consistency
-        except IOError as e:
-            # Optionally, log this error
-            # print(f"Error saving manifest {self.path}: {e}")
-            pass
+                )
+        except Exception as e:
+            self.logger.log(f"儲存 Manifest 檔案 '{self.path}' 時發生錯誤: {e}", level="error")
+            # 錯誤已被記錄。依照作業描述，方法正常結束。
 
     @staticmethod
-    def get_file_hash(file_path):
+    def get_file_hash(file_path: str) -> Union[str, None]:
         """計算給定檔案路徑的 SHA256 雜湊值。
 
         以二進位模式讀取檔案，分塊計算雜湊值以處理大檔案。
@@ -101,9 +123,10 @@ class FileManifest:
             return None
         except IOError as e:  # Handle other potential IOErrors during read
             # print(f"IOError while hashing file {file_path}: {e}")
+            # Logger could be used here if passed, or raise an error
             return None
 
-    def has_been_processed(self, file_hash):
+    def has_been_processed(self, file_hash: str) -> bool:
         """檢查指定的檔案雜湊值是否已經被處理過。
 
         :param file_hash: 要檢查的檔案雜湊值。
@@ -113,7 +136,7 @@ class FileManifest:
         """
         return file_hash in self.processed_hashes
 
-    def add_processed_hashes(self, hashes_to_add):
+    def add_processed_hashes(self, hashes_to_add: Union[str, Iterable[str]]) -> None:
         """將一組新的雜湊值添加到已處理清單中並儲存。
 
         這個方法會更新 self.processed_hashes 集合，然後呼叫 _save() 方法

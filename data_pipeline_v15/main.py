@@ -6,7 +6,7 @@
 
 主要功能包括：
 - 解析 --project_name, --run_mode, --conflict_strategy, --workspace_path 等參數。
-- 根據參數及內建預設值 (如 schemas, duckdb_settings) 建構傳遞給 Orchestrator 的 config。
+- 根據參數及設定檔 (schemas.json) 建構傳遞給 Orchestrator 的 config。
 - 實例化 PipelineOrchestrator 並呼叫其 run() 方法。
 
 執行範例 (假設已安裝 Poetry 並在專案根目錄):
@@ -16,8 +16,11 @@
 
 import argparse
 import os
-import json  # 用於預設的 schemas (雖然此版本直接定義) 及 config 輸出 (若需要)
+import json # 用於載入 schemas.json 及 config 輸出 (若需要)
+from pathlib import Path # 用於處理檔案路徑
+import sys # 用於錯誤輸出 exit
 from src.data_pipeline_v15.pipeline_orchestrator import PipelineOrchestrator
+from src.data_pipeline_v15.core import constants # 修改：導入常數
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -42,15 +45,15 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--run_mode",
         type=str,
-        choices=["NORMAL", "BACKFILL"],
-        default="NORMAL",
+        choices=[constants.RUN_MODE_NORMAL, constants.RUN_MODE_BACKFILL], # 修改：使用常數
+        default=constants.RUN_MODE_NORMAL, # 修改：使用常數
         help="執行模式：'NORMAL' (僅處理新檔案) 或 'BACKFILL' (重新處理所有檔案)。",
     )
     parser.add_argument(
         "--conflict_strategy",
         type=str,
-        choices=["REPLACE", "IGNORE"],
-        default="REPLACE",
+        choices=[constants.CONFLICT_STRATEGY_REPLACE, constants.CONFLICT_STRATEGY_IGNORE], # 修改：使用常數
+        default=constants.CONFLICT_STRATEGY_REPLACE, # 修改：使用常數
         help="數據衝突時的解決策略：'REPLACE' (取代舊資料) 或 'IGNORE' (忽略新資料)。",
     )
     parser.add_argument(
@@ -59,14 +62,6 @@ def parse_arguments() -> argparse.Namespace:
         default=None,  # Default is None, handled in build_config_from_args
         help="指定本地工作區的根路徑。若未提供，則預設在當前目錄下，以專案名稱加上 '_workspace_v15' 後綴建立資料夾。",
     )
-    # 未來可考慮加入 --config_file 參數以載入更詳細的 JSON 設定檔
-    # parser.add_argument(
-    #     "--config_file",
-    #     type=str,
-    #     default=None,
-    #     help="可選的 JSON 設定檔路徑，用於提供更詳細的組態。"
-    # )
-
     args = parser.parse_args()
     return args
 
@@ -93,87 +88,42 @@ def build_config_from_args(args: argparse.Namespace) -> dict:
             os.path.join(".", f"{project_name}_workspace_v15")
         )
 
-    default_schemas = {
-        "weekly_report": {
-            "keywords": ["weekly_fut", "weekly_opt", "opendata"],
-            "db_table_name": "fact_weekly_report",
-            "unique_key": ["trading_date", "product_name", "investor_type"],
-            "columns_map": {
-                "trading_date": {"db_type": "DATE", "aliases": ["日期", "交易日期"]},
-                "product_name": {"db_type": "VARCHAR", "aliases": ["商品名稱", "契約"]},
-                "investor_type": {"db_type": "VARCHAR", "aliases": ["身份別"]},
-                "long_pos_volume": {"db_type": "BIGINT", "aliases": ["多方交易口數"]},
-                "long_pos_value": {"db_type": "BIGINT", "aliases": ["多方交易金額"]},
-                "short_pos_volume": {"db_type": "BIGINT", "aliases": ["空方交易口數"]},
-                "short_pos_value": {"db_type": "BIGINT", "aliases": ["空方交易金額"]},
-            },
-        },
-        "default_daily": {
-            "keywords": [
-                "daily",
-                "optionsdaily",
-                "fut",
-                "opt",
-                "2021",
-                "2022",
-                "2023",
-                "2024",
-                "csv",
-                "delta",
-            ],
-            "db_table_name": "fact_daily_ohlc",
-            "unique_key": [
-                "trading_date",
-                "product_id",
-                "expiry_month",
-                "strike_price",
-                "option_type",
-            ],
-            "columns_map": {
-                "trading_date": {"db_type": "DATE", "aliases": ["交易日期", "日期"]},
-                "product_id": {"db_type": "VARCHAR", "aliases": ["契約", "商品代號"]},
-                "expiry_month": {"db_type": "VARCHAR", "aliases": ["到期月份(週別)"]},
-                "strike_price": {"db_type": "DOUBLE", "aliases": ["履約價"]},
-                "option_type": {"db_type": "VARCHAR", "aliases": ["買賣權"]},
-                "open": {"db_type": "DOUBLE", "aliases": ["開盤價"]},
-                "high": {"db_type": "DOUBLE", "aliases": ["最高價"]},
-                "low": {"db_type": "DOUBLE", "aliases": ["最低價"]},
-                "close": {"db_type": "DOUBLE", "aliases": ["收盤價"]},
-                "volume": {"db_type": "BIGINT", "aliases": ["成交量", "成交口數"]},
-                "open_interest": {
-                    "db_type": "BIGINT",
-                    "aliases": ["未沖銷契約量", "未沖銷契約數", "未沖銷口數"],
-                },
-                "delta": {"db_type": "DOUBLE", "aliases": ["delta"]},
-            },
-        },
-    }
+    loaded_schemas = None
+    try:
+        schemas_file_path = Path(__file__).parent / 'config' / 'schemas.json'
+        with open(schemas_file_path, 'r', encoding='utf-8') as f:
+            loaded_schemas = json.load(f)
+        # 從外部檔案 config/schemas.json 成功載入資料綱要設定
+    except FileNotFoundError:
+        print(f"錯誤：資料綱要設定檔 {schemas_file_path} 未找到。", file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"錯誤：解析資料綱要設定檔 {schemas_file_path} 時發生錯誤：{e}", file=sys.stderr)
+        sys.exit(1)
 
     config = {
         "project_name": project_name,
         "run_mode": args.run_mode.upper(),
         "conflict_strategy": args.conflict_strategy.upper(),
         "paths": {
-            "local_workspace": local_workspace_root,  # This is the main root for this project's workspace
-            # Orchestrator's _resolve_paths will use this 'local_workspace' to build other sub-paths
-            # by joining with default or configured sub-directory names.
-            "input_dir_name": "01_input_files",
-            "staging_dir_name": "02_staging_parquet",
-            "database_dir_name": "03_database_output",
-            "manifests_dir_name": "04_manifests",
-            "failed_files_dir_name": "05_failed_files",
-            "logs_dir_name": "99_logs",
+            "local_workspace": local_workspace_root,
+            "input_dir_name": constants.DIR_NAME_INPUT, # 修改：使用常數
+            "staging_dir_name": constants.DIR_NAME_STAGING, # 修改：使用常數
+            "database_dir_name": constants.DIR_NAME_DATABASE, # 修改：使用常數
+            "manifests_dir_name": constants.DIR_NAME_MANIFESTS, # 修改：使用常數
+            "failed_files_dir_name": constants.DIR_NAME_FAILED, # 修改：使用常數
+            "logs_dir_name": constants.DIR_NAME_LOGS, # 修改：使用常數
         },
         "db_filename": f"{project_name.lower().replace(' ', '_')}_output.duckdb",
         "duckdb_settings": {
             "memory_limit_gb": int(
                 os.environ.get("DUCKDB_MEMORY_LIMIT_GB", 4)
-            ),  # Ensure int
+            ),
             "threads": int(
                 os.environ.get("DUCKDB_THREADS", os.cpu_count() or 2)
-            ),  # Ensure int
+            ),
         },
-        "schemas": default_schemas,
+        "schemas": loaded_schemas,
         "micro_batch_size": 20,
         "hardware_monitor_interval": 5,
         "recreate_workspace_on_run": True,
@@ -195,27 +145,19 @@ def main():
     try:
         args = parse_arguments()
         config = build_config_from_args(args)
-
-        # Orchestrator's logger will be initialized within its __init__
         orchestrator = PipelineOrchestrator(config=config)
-
         orchestrator.run()
-
-        # Retrieve log path from orchestrator for the final message
         final_log_path = getattr(
             orchestrator, "main_log_file_path", orchestrator.log_file_path
         )
         print(f"INFO: 管道執行成功完成。主要日誌檔案位於: {final_log_path}")
 
     except SystemExit:
-        # argparse throws SystemExit for --help or errors, this is normal.
         pass
     except Exception as e:
         print(f"CRITICAL: 管道執行過程中遭遇無法恢復的錯誤: {e}")
         print(f"CRITICAL: 請檢查日誌檔案以獲取詳細的錯誤追蹤訊息。")
-        # import traceback
-        # print(traceback.format_exc()) # Optionally print traceback here for immediate debug
-        # sys.exit(1) # Indicate error exit status
+        sys.exit(1)
 
 
 if __name__ == "__main__":
