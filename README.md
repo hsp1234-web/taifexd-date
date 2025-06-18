@@ -1,71 +1,24 @@
-# 數據整合平台 v15
+# 數據整合平台 v15 - 智慧更新版
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/hsp1234-web/taifexd-date/blob/main/data_pipeline_v15/run_v15.ipynb)
 
-本專案是一個為處理台灣期貨交易所 (TAIFEX) 每日交易數據而設計的自動化數據整合平台。其核心價值在於提供一個具備高度容錯能力與冪等性 (Idempotent) 的 ETL (Extract, Transform, Load) 流程，確保數據處理的穩定與一致性。
+本專案是一個為處理台灣期貨交易所 (TAIFEX) 每日交易數據而設計的自動化數據整合平台。此版本內建智慧更新與參數化執行功能。
 
 ## 使用教學
 
-為了讓所有使用者都能輕鬆執行，我們提供兩種最簡單的方式：
+本專案的核心是提供一個可重複使用的 Google Colab 筆記本。
 
-### (推薦) 方法一：點擊徽章一鍵開啟
+### 首次設定
 
-1.  點擊本文件最上方的 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/hsp1234-web/taifexd-date/blob/main/data_pipeline_v15/run_v15.ipynb) 徽章。
-2.  您的瀏覽器將會自動開啟一個預設好的 Google Colab 筆記本。
-3.  在筆記本中，點擊執行按鈕 ▶️，即可開始。
+1.  點擊上方的 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/hsp1234-web/taifexd-date/blob/main/data_pipeline_v15/run_v15.ipynb) 徽章，開啟公版「樣板筆記本」。
+2.  在 Colab 選單中，點擊 **「檔案」(File)** -> **「在雲端硬碟中儲存複本」(Save a copy in Drive)**。
+3.  這會在您的 Google Drive 中建立一個專屬於您的「個人版筆記本」。**請關閉公版，並在您個人的版本上進行所有後續操作。**
 
-### 方法二：複製程式碼自行貼上
+### 日常執行
 
-如果您習慣使用自己的 Colab 環境，請依照以下步驟操作：
-
-1.  開啟一個新的 Google Colab 筆記本。
-2.  完整複製下方的所有程式碼。
-3.  將程式碼貼到筆記本的儲存格中，並點擊執行按鈕 ▶️。
-
-```python
-#@markdown ## 參數設定
-#@markdown 請在下方輸入您的專案資料夾名稱，然後點擊 ▶️ 執行此儲存格。
-
-project_folder = "MyTaifexDataProject" #@param {type:"string"}
-
-#@markdown ---
-#@markdown ## 執行主要程式
-#@markdown 確認參數後，下方的程式碼會自動完成所有工作。
-
-# --- 環境設定 ---
-import warnings
-import os
-warnings.filterwarnings('ignore')
-print(f"✅ 參數設定完成！專案資料夾將被設定為：{project_folder}")
-
-# --- 掛載 Google Drive ---
-try:
-    from google.colab import drive
-    print("\n⏳ 正在請求掛載 Google Drive...")
-    drive.mount('/content/drive')
-    print("✅ Google Drive 掛載成功！")
-except ImportError:
-    print("非 Colab 環境，跳過掛載 Drive。")
-
-# --- 下載最新專案 ---
-print("\n⏳ 正在從 GitHub 下載最新專案...")
-!git clone -q https://github.com/hsp1234-web/taifexd-date.git
-project_path = "/content/taifexd-date/data_pipeline_v15"
-os.chdir(project_path)
-print("✅ 專案下載完成！")
-
-# --- 安裝相依套件 ---
-print("\n⏳ 正在安裝必要的 Python 套件...")
-!pip install -q pandas duckdb
-print("✅ 套件安裝完成！")
-
-# --- 執行數據管道主程式 ---
-print("\n🚀 即將啟動數據整合平台...")
-print("-" * 20)
-!python main.py --project-folder-name={project_folder}
-print("-" * 20)
-print("🎉 執行完畢！")
-```
+1.  從您的 Google Drive 開啟您的「個人版筆記本」。
+2.  執行第一個儲存格，它會自動檢查是否有新版本，並讓您設定本次執行的參數（例如要處理的特定檔案）。
+3.  依照筆記本中的引導完成操作即可。
 
 ## 預期 Google Drive 資料夾結構
 
@@ -82,7 +35,7 @@ MyTaifexDataProject/
 │
 └── Output/
     ├── database/
-    │   └── processed_data.duckdb
+    │   └── processed_data.duckdb (此檔名可由參數控制)
     └── log/
-        └── pipeline.log
+        └── pipeline.log (此檔名可由參數控制)
 ```
