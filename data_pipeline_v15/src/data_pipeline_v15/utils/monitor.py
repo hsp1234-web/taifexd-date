@@ -5,65 +5,6 @@ from .logger import Logger
 
 
 class HardwareMonitor:
-    def __init__(self, logger, interval=2):
-        self.logger = logger
-        self._interval = interval
-        self._thread = None
-        self._stop_event = threading.Event()
-
-    def _monitor(self):
-        """Internal method to monitor hardware resources."""
-        while not self._stop_event.is_set():
-            try:
-                cpu = psutil.cpu_percent()
-                mem = psutil.virtual_memory()
-                disk = psutil.disk_usage("/")
-                # 確保狀態訊息打印在單行然後被清除
-                # \r (歸位字元) 將游標移至行首
-                status = f"⏱️  中央處理器: {cpu:5.1f}% | 記憶體: {mem.percent:5.1f}% ({mem.used/1024**3:.2f}/{mem.total/1024**3:.2f} GB) | 磁碟: {disk.percent:5.1f}% \r"
-                print(status, end="")
-                # 強制刷新 stdout 以確保即時打印，尤其在某些執行環境中
-                # sys.stdout.flush() # 需要 import sys，根據 logger 行為考慮是否必要
-
-                # 等待指定的時間間隔或直到停止事件被設定
-                self._stop_event.wait(timeout=self._interval)
-            except Exception as e:
-                # 可選：如果 logger 可用且期望記錄，則記錄例外
-                # self.logger.log(f"Error in monitor thread: {e}", "error")
-                pass  # 靜默繼續或處理錯誤
-
-    def start(self):
-        """Starts the hardware monitoring thread."""
-        if (
-            not self._thread or not self._thread.is_alive()
-        ):  # 同時檢查執行緒是否存活
-            self.logger.log("啟動高頻率即時硬體監控...", "info")
-            self._stop_event.clear()
-            self._thread = threading.Thread(target=self._monitor, daemon=True)
-            self._thread.start()
-        else:
-            self.logger.log("硬體監控已經在運行中。", "info")
-
-    def stop(self):
-        """Stops the hardware monitoring thread."""
-        if self._thread and self._thread.is_alive():
-            self._stop_event.set()
-            self._thread.join(
-                timeout=self._interval + 0.5
-            )  # 給予執行緒多一點時間來結束
-            # 清除先前打印狀態訊息的該行
-            # 確保長度足以覆蓋先前的狀態訊息
-            print(
-                "\r" + " " * 100 + "\r", end=""
-            )  # 歸位字元、空格、再次歸位字元
-            # sys.stdout.flush() # 如果在 _monitor 中使用了 sys.stdout.flush()
-            self.logger.log("停止高頻率即時硬體監控...", "info")
-            self._thread = None
-        else:
-            self.logger.log("硬體監控尚未啟動或已停止。", "info")
-
-
-class HardwareMonitor:
     """硬體資源監控器。
 
     這個類別提供了一個背景執行緒來定期監控 CPU、記憶體和磁碟使用情況，

@@ -10,6 +10,7 @@ import shutil
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 import duckdb
