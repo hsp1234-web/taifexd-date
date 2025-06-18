@@ -227,7 +227,8 @@ class PipelineOrchestrator:
         )
         try:
             self.file_manifest = FileManifest(
-                manifest_path=self.paths["file_manifest_path"]
+                manifest_path=self.paths["file_manifest_path"],
+                logger=self.logger # 傳遞 logger 實例
             )
             self.logger.log(
                 f"FileManifest 已在 '{self.paths['file_manifest_path']}' 初始化。",
