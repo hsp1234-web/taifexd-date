@@ -3,6 +3,7 @@ database_name: "processed_data.duckdb"
 log_name: "pipeline.log"
 local_workspace: "/tmp/taifex_data_workspace"
 remote_base_path: "/content/drive/MyDrive"
+max_workers: null
 directories:
   input: "00_input"
   processed: "01_processed"
