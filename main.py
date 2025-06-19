@@ -9,7 +9,7 @@ def parse_arguments():
     Returns:
         argparse.Namespace: 包含解析後參數的物件。
     """
-    parser = argparse.ArgumentParser(description="數據整合管線 v16 - 命令列啟動器")
+    parser = argparse.ArgumentParser(description="數據整合管線 v18 - 命令列啟動器")
     parser.add_argument(
         "--project-folder-name",
         type=str,
