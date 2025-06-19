@@ -3,6 +3,7 @@ import shutil
 import time
 import json # Added import
 from datetime import datetime
+from pathlib import Path # Added import
 
 import duckdb
 
@@ -46,6 +47,7 @@ class PipelineOrchestrator:
         log_name: str,
         target_zip_files: str,
         debug_mode: bool = False,
+        schemas_file_path: str = None, # Optional path for schemas
     ):
         """
         初始化協調器。
@@ -57,6 +59,7 @@ class PipelineOrchestrator:
             log_name (str): 日誌檔案名稱。
             target_zip_files (str): 指定要處理的 ZIP 檔案列表（以逗號分隔），或為空。
             debug_mode (bool, optional): 是否啟用除錯模式。預設為 False。
+            schemas_file_path (str, optional): schemas.json 的可選路徑。如果為 None，則使用預設路徑。
         """
         # --- 路徑設定 ---
         self.project_path = os.path.join(base_path, project_folder_name)
@@ -90,21 +93,33 @@ class PipelineOrchestrator:
         self.database_file = os.path.join(self.db_path, database_name)
 
         # --- 載入 Schemas 設定 ---
-        schemas_file_path = os.path.join(self.project_path, "config", "schemas.json")
+        # Use provided schemas_file_path if available, otherwise default
+        effective_schemas_file_path_str = None
+        if schemas_file_path:
+            effective_schemas_file_path_str = str(schemas_file_path)
+            self.logger.info(f"使用提供的 schemas 路徑: '{effective_schemas_file_path_str}'")
+        else:
+            # Default path logic
+            current_file_dir = Path(__file__).parent
+            project_root = current_file_dir.parent.parent.parent
+            default_schemas_path = project_root / "config" / "schemas.json"
+            effective_schemas_file_path_str = str(default_schemas_path)
+            self.logger.info(f"使用預設的 schemas 路徑: '{effective_schemas_file_path_str}'")
+
         self.schemas_config = {}
-        if os.path.exists(schemas_file_path):
+        if os.path.exists(effective_schemas_file_path_str):
             try:
-                with open(schemas_file_path, "r", encoding="utf-8") as f:
+                with open(effective_schemas_file_path_str, "r", encoding="utf-8") as f:
                     self.schemas_config = json.load(f)
-                self.logger.info(f"成功從 '{schemas_file_path}' 載入 schemas 設定。")
+                self.logger.info(f"成功從 '{effective_schemas_file_path_str}' 載入 schemas 設定。")
             except json.JSONDecodeError as e:
-                self.logger.error(f"解析 schemas 設定檔 '{schemas_file_path}' 失敗: {e}")
+                self.logger.error(f"解析 schemas 設定檔 '{effective_schemas_file_path_str}' 失敗: {e}")
                 self.schemas_config = {} # Keep it as an empty dict on error
             except Exception as e:
-                self.logger.error(f"讀取 schemas 設定檔 '{schemas_file_path}' 時發生其他錯誤: {e}")
+                self.logger.error(f"讀取 schemas 設定檔 '{effective_schemas_file_path_str}' 時發生其他錯誤: {e}")
                 self.schemas_config = {} # Keep it as an empty dict on error
         else:
-            self.logger.error(f"Schemas 設定檔 '{schemas_file_path}' 不存在。FileParser 將使用空設定。")
+            self.logger.error(f"Schemas 設定檔 '{effective_schemas_file_path_str}' 不存在。FileParser 將使用空設定。")
             self.schemas_config = {}
 
 
@@ -328,7 +343,7 @@ class PipelineOrchestrator:
                 # This needs to be reconciled. For now, we pass filename.
                 # If overall_status_for_manifest is success, update_manifest will attempt to get hash.
                 # If it was an error before hashing (like in the block above), filename is fine.
-                self.manifest_manager.update_manifest(filename, overall_status_for_manifest, overall_message_for_manifest)
+                self.manifest_manager.update_manifest(file_path, overall_status_for_manifest, overall_message_for_manifest, original_filename=filename)
                 self.logger.info(f"--- 檔案處理完畢: {filename} (最終狀態記錄: {overall_status_for_manifest}) ---")
 
         except Exception as e:
