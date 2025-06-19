@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from .utils.logger import Logger # 用於 Logger 的類型提示
 
 
-class FileManifest:
+class ManifestManager:
     """檔案處理清單管理器。
 
     這個類別用於追蹤哪些檔案已經被處理過。它透過維護一個包含
