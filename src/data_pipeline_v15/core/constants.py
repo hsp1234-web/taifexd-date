@@ -21,6 +21,8 @@ KEY_TABLE = "table"
 KEY_COUNT = "count"
 KEY_PATH = "path"
 KEY_RESULTS = "results"
+KEY_DATAFRAME = "dataframe" # For passing DataFrame object
+KEY_MATCHED_SCHEMA_NAME = "matched_schema_name" # For schema name used by FileParser
 
 # 狀態值 (Status values)
 STATUS_SUCCESS = "success"

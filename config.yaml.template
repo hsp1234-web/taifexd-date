@@ -26,3 +26,45 @@ directories:
   quarantine: "03_quarantine" # Directory for quarantined files
   db: "98_database"       # Directory for the database
   log: "99_logs"        # Directory for log files
+
+# Validation rules for data quality checks.
+# Rules are defined per schema name (e.g., "default_daily", "weekly_report").
+# For each column, you can specify rules like:
+#   non_null: true  (column should not have null values)
+#   min_value: 0    (column value should be >= 0, for numeric columns)
+#   max_value: 100  (column value should be <= 100, for numeric columns)
+#   pattern_match: "^TXF.*" (column value should match the regex pattern, for string columns)
+#   allowed_values: ["C", "P"] (column value must be one of these, for string columns)
+validation_rules:
+  default_daily: # Rules for data matching the "default_daily" schema (e.g., fact_daily_ohlc table)
+    trading_date:
+      non_null: true    # Trading date should always be present
+    product_id:
+      non_null: true    # Product ID (symbol) should always be present
+    close:
+      non_null: true    # Closing price should always be present
+      min_value: 0      # Closing price should not be negative (adjust if options can have negative theoretical values in some cases)
+    volume:
+      non_null: true    # Volume should be present
+      min_value: 0      # Volume cannot be negative
+    open_interest:
+      min_value: 0      # Open interest cannot be negative
+  weekly_report: # Rules for data matching the "weekly_report" schema (e.g., fact_weekly_report table)
+    trading_date:
+      non_null: true
+    product_name:
+      non_null: true
+    investor_type:
+      non_null: true
+    long_pos_volume:
+      non_null: true    # Assuming these positions should always have a value if reported
+      min_value: 0
+    short_pos_volume:
+      non_null: true
+      min_value: 0
+    long_pos_value:
+      non_null: true
+      min_value: 0
+    short_pos_value:
+      non_null: true
+      min_value: 0
