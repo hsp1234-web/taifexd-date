@@ -3,9 +3,11 @@
         "keywords": [
             "weekly_fut",
             "weekly_opt",
-            "opendata"
+            "opendata",
+            "商品名稱"
         ],
         "db_table_name": "fact_weekly_report",
+        "required_columns": ["trading_date", "product_name", "investor_type", "long_pos_volume", "short_pos_volume"],
         "unique_key": [
             "trading_date",
             "product_name",
@@ -72,6 +74,7 @@
             "delta"
         ],
         "db_table_name": "fact_daily_ohlc",
+        "required_columns": ["trading_date", "product_id", "close", "volume"],
         "unique_key": [
             "trading_date",
             "product_id",
@@ -90,6 +93,7 @@
             "product_id": {
                 "db_type": "VARCHAR",
                 "aliases": [
+                    "契約代號",
                     "契約",
                     "商品代號"
                 ]

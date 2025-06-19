@@ -9,11 +9,12 @@ from .core import constants # 修改：導入常數
 
 
 class FileParser:
-    def __init__(self, manifest_manager, logger):
+    def __init__(self, manifest_manager, logger, schemas_config): # Added schemas_config
         self.manifest_manager = manifest_manager
         self.logger = logger
+        self.schemas_config = schemas_config # Store schemas_config
 
-    def parse_file(self, file_path: str, staging_dir: str, schemas_config: dict) -> dict:
+    def parse_file(self, file_path: str, staging_dir: str) -> dict: # Removed schemas_config
         """處理單一來源檔案（CSV 或 ZIP），將其解析並轉換為 Parquet 格式。
         (docstring 已省略)
         """
@@ -42,7 +43,7 @@ class FileParser:
                                 result = self._parse_content( # Renamed
                                     csv_content,
                                     staging_dir,
-                                    schemas_config,
+                                    # schemas_config removed, will use self.schemas_config
                                     display_name_in_zip,
                                 )
                                 all_results.append(result)
@@ -72,10 +73,11 @@ class FileParser:
                     constants.KEY_REASON: f"處理 ZIP 時發生未知錯誤: {e}",
                 }
         else: # Not a ZIP file, assume CSV or other parsable content
-            return self._parse_content(file_path, staging_dir, schemas_config, original_filename) # Renamed
+            # schemas_config removed, will use self.schemas_config
+            return self._parse_content(file_path, staging_dir, original_filename) # Renamed
 
     def _parse_content( # Renamed
-        self, file_input, staging_dir: str, schemas_config: dict, display_name: str # Renamed file_or_buffer to file_input
+        self, file_input, staging_dir: str, display_name: str # Renamed file_or_buffer to file_input and removed schemas_config
     ) -> dict:
         """解析單個檔案內容（來自路徑或記憶體緩衝區），進行內容嗅探、綱要匹配、欄位正規化，並儲存為 Parquet 格式。
         (docstring 已省略)
@@ -115,7 +117,8 @@ class FileParser:
                 }
 
             # Content-based schema detection
-            for schema_name, schema_def in schemas_config.items():
+            # Use self.schemas_config instead of local variable
+            for schema_name, schema_def in self.schemas_config.items():
                 keywords = schema_def.get("keywords", [])
                 if not keywords:
                     continue
@@ -132,7 +135,8 @@ class FileParser:
                 if matched_schema_name:
                     break
 
-            if not matched_schema_name and "default_daily" in schemas_config: # Fallback to default if specified
+            # Use self.schemas_config here as well
+            if not matched_schema_name and "default_daily" in self.schemas_config: # Fallback to default if specified
                 self.logger.warning(f"檔案 '{display_name}' 未透過內容關鍵字匹配到特定 schema，嘗試使用 'default_daily'。")
                 matched_schema_name = "default_daily"
                 # detected_encoding remains None, pd.read_csv will try its list
@@ -178,7 +182,8 @@ class FileParser:
                     constants.KEY_REASON: f"無法使用支援的編碼成功讀取檔案內容，或檔案為空. Errors: {'; '.join(error_messages)}",
                 }
 
-            schema = schemas_config.get(matched_schema_name)
+            # Use self.schemas_config here as well
+            schema = self.schemas_config.get(matched_schema_name)
             if not schema or not schema.get("columns_map"):
                 return {
                     constants.KEY_STATUS: constants.STATUS_ERROR,
@@ -209,15 +214,46 @@ class FileParser:
 
             df = df.reindex(columns=target_columns) # Reindex to ensure consistent column order and add missing columns as NaN
 
+            # --- Required columns check ---
+            required_columns = schema.get("required_columns", [])
+            if required_columns:
+                empty_or_null_required_cols = []
+                for req_col in required_columns:
+                    if req_col not in df.columns:
+                        # This implies 'req_col' from 'required_columns' was NOT in 'target_columns' (schema definition error)
+                        # or it's a column that should have been mapped but wasn't.
+                        empty_or_null_required_cols.append(f"{req_col} (definition/mapping issue, not in DataFrame columns)")
+                        continue
+
+                    if df[req_col].isnull().all():
+                        empty_or_null_required_cols.append(req_col)
+
+                if empty_or_null_required_cols:
+                    self.logger.warning(
+                        f"檔案 '{display_name}' 匹配到 schema '{matched_schema_name}', "
+                        f"但以下必要欄位缺失或完全為空: {', '.join(empty_or_null_required_cols)}. "
+                        f"DataFrame 欄位: {df.columns.tolist()}"
+                    )
+                    return {
+                        constants.KEY_STATUS: constants.STATUS_ERROR,
+                        constants.KEY_FILE: display_name,
+                        constants.KEY_REASON: (
+                            f"內容與 schema '{matched_schema_name}' 的必要欄位不符. "
+                            f"缺失或為空的必要欄位: {', '.join(empty_or_null_required_cols)}."
+                        ),
+                    }
+            # --- End of required columns check ---
+
             output_hash = hashlib.sha256(display_name.encode("utf-8")).hexdigest()
             output_dir = os.path.join(staging_dir, matched_schema_name)
             os.makedirs(output_dir, exist_ok=True)
             output_path = os.path.join(output_dir, f"{output_hash}.parquet")
             df.to_parquet(output_path, engine="pyarrow", index=False)
+            db_table_name = schema.get("db_table_name", matched_schema_name) # Use db_table_name if available
             return {
                 constants.KEY_STATUS: constants.STATUS_SUCCESS,
                 constants.KEY_FILE: display_name,
-                constants.KEY_TABLE: matched_schema_name,
+                constants.KEY_TABLE: db_table_name, # Return db_table_name
                 constants.KEY_COUNT: len(df),
                 constants.KEY_PATH: output_path,
             }
