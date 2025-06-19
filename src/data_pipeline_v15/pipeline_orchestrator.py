@@ -26,6 +26,7 @@ from .core import constants  # Added to allow access to constants like constants
 from .database_loader import DatabaseLoader
 from .file_parser import FileParser
 from .manifest_manager import ManifestManager
+from .data_validator import Validator # Import Validator
 from .utils.logger import setup_logger
 from .utils.monitor import get_hardware_usage
 
@@ -201,8 +202,13 @@ class PipelineOrchestrator:
         # --- 模組初始化 ---
         # ManifestManager and DatabaseLoader now operate on local paths
         self.manifest_manager = ManifestManager(manifest_path=self.local_manifest_file, logger=self.logger)
-        self.file_parser = FileParser(self.manifest_manager, self.logger, self.schemas_config) # processed_path here is for internal logic if needed, actual move is local
-        self.db_loader = DatabaseLoader(self.local_database_file, self.logger)
+        self.file_parser = FileParser(self.manifest_manager, self.logger, self.schemas_config)
+        self.db_loader = DatabaseLoader(self.local_database_file, self.logger) # Operates on local DB file
+
+        # Initialize Validator
+        validation_rules = self.config.get("validation_rules", {})
+        self.validator = Validator(validation_rules, self.logger)
+
 
         # --- 目標檔案處理 ---
         self.target_files = (
@@ -365,15 +371,33 @@ class PipelineOrchestrator:
         return {
             "filename": filename,
             "original_file_path": str(local_file_path),
-            "file_hash": file_hash, # Add file_hash to the result
+            "file_hash": file_hash,
             "status": parse_result.get(constants.KEY_STATUS, constants.STATUS_ERROR),
             "message": parse_result.get(constants.KEY_REASON, f"檔案 '{filename}' 處理時遇到未知狀況。"),
-            "parquet_path": parse_result.get(constants.KEY_PATH), # Path to the generated Parquet file
-            "table_name": parse_result.get(constants.KEY_TABLE),
-            "data_count": parse_result.get(constants.KEY_COUNT, 0),
-            "sub_results": parse_result.get(constants.KEY_RESULTS) # For ZIP files
+            constants.KEY_DATAFRAME: parse_result.get(constants.KEY_DATAFRAME), # Pass DataFrame
+            constants.KEY_MATCHED_SCHEMA_NAME: parse_result.get(constants.KEY_MATCHED_SCHEMA_NAME), # Pass schema name
+            # KEY_PATH is no longer provided by FileParser directly for the final valid parquet
+            "table_name": parse_result.get(constants.KEY_TABLE), # DB target table name
+            "data_count": parse_result.get(constants.KEY_COUNT, 0), # Original count from parser
+            "sub_results": parse_result.get(constants.KEY_RESULTS)
         }
 
+    def _dataframe_to_temp_parquet(self, df, temp_identifier: str, original_filename_for_hash: str) -> Path:
+        """Helper to save a DataFrame to a uniquely named Parquet file in a temporary local staging area."""
+        # Use a consistent staging area for these intermediate parquets
+        temp_parquet_staging_dir = self.local_project_path / "temp_intermediate_parquets"
+        temp_parquet_staging_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create a unique filename to avoid clashes if multiple DFs from same original file (e.g. valid/invalid splits)
+        # Using time might lead to issues if called too quickly for the same file, hash of content might be better
+        # but for simplicity, a hash of original filename + identifier + time should be reasonably unique.
+        unique_hash_input = f"{original_filename_for_hash}_{temp_identifier}_{time.time_ns()}"
+        file_hash = hashlib.sha256(unique_hash_input.encode()).hexdigest()
+        parquet_path = temp_parquet_staging_dir / f"{file_hash}.parquet"
+
+        df.to_parquet(parquet_path, engine="pyarrow", index=False)
+        self.logger.info(f"DataFrame ({temp_identifier} for {original_filename_for_hash}) saved to temporary Parquet: {parquet_path}")
+        return parquet_path
 
     def run(self):
         """執行完整數據管線，採用本地優先工作流程並行處理檔案解析。"""
@@ -439,113 +463,116 @@ class PipelineOrchestrator:
             # 主程序中串列處理結果 (資料庫載入、檔案移動、Manifest 更新)
             self.logger.info("開始串列處理檔案解析結果...")
             for result_item in processed_file_results:
-                filename = result_item["filename"]
-                original_file_path = Path(result_item["original_file_path"]) # Convert back to Path
+                filename = result_item["filename"] # This is the display_name
+                original_file_path = Path(result_item["original_file_path"])
                 file_hash = result_item["file_hash"]
-                overall_status = result_item["status"]
-                overall_message = result_item["message"]
+                current_status = result_item["status"] # Status from FileParser
+                current_message = result_item["message"]
+                parsed_df = result_item.get(constants.KEY_DATAFRAME)
+                db_target_table = result_item.get("table_name") # Table name for main data
+                matched_schema_name_for_rules = result_item.get(constants.KEY_MATCHED_SCHEMA_NAME, "unknown_schema")
 
-                self.logger.info(f"處理結果 - 檔案: {filename}, 狀態: {overall_status}, 訊息: {overall_message}")
+                self.logger.info(f"處理檔案 '{filename}' (雜湊: {file_hash}) 的解析結果。初始狀態: {current_status}")
 
-                move_to_local_processed = False
+                final_overall_status_for_file = current_status
+                final_overall_message_for_file = current_message
+                move_original_to_processed = False
 
-                if overall_status == constants.STATUS_SKIPPED:
-                    # File was skipped (e.g., already processed), no further action needed for DB or file move.
-                    # Manifest update for skipped files is handled by _process_single_file logic if it does its own update,
-                    # or here if the main thread is responsible for all manifest updates.
-                    # For now, assume _process_single_file doesn't update manifest directly.
-                    # The manifest update at the end of this loop will record the skip.
-                    pass # No DB load, no file move based on this status alone from parser
+                if current_status == constants.STATUS_SUCCESS and parsed_df is not None and not parsed_df.empty:
+                    self.logger.info(f"對檔案 '{filename}' (schema: {matched_schema_name_for_rules}) 執行資料驗證...")
+                    valid_df, invalid_df = self.validator.validate(parsed_df, filename, matched_schema_name_for_rules)
 
-                elif overall_status == constants.STATUS_GROUP_RESULT: # ZIP file result
-                    sub_results = result_item.get("sub_results", [])
-                    successful_sub_loads = 0
-                    failed_sub_loads = 0
-                    at_least_one_sub_db_loaded = False
-                    if not sub_results: # Empty ZIP or no parsable content
-                         overall_message = result_item.get("message", f"ZIP 檔案 '{filename}' 未包含可處理的 CSV 內容。")
-                         overall_status = constants.STATUS_ERROR # Ensure it's error if no sub-results to load
-                    else:
-                        for sub_item_res in sub_results:
-                            sub_status = sub_item_res.get(constants.KEY_STATUS)
-                            sub_parquet_path = sub_item_res.get(constants.KEY_PATH)
-                            sub_table_name = sub_item_res.get(constants.KEY_TABLE)
-                            sub_file_name = sub_item_res.get(constants.KEY_FILE, "未知子項目")
-                            if sub_status == constants.STATUS_SUCCESS and sub_parquet_path and sub_table_name:
-                                try:
-                                    self.db_loader.load_parquet(sub_table_name, sub_parquet_path)
-                                    self.logger.info(f"子項目 '{sub_file_name}' (來自 {filename}) 資料成功載入本地資料庫。")
-                                    successful_sub_loads += 1
-                                    at_least_one_sub_db_loaded = True
-                                except Exception as db_e:
-                                    self.logger.error(f"子項目 '{sub_file_name}' (來自 {filename}) 資料載入本地資料庫失敗: {db_e}")
-                                    failed_sub_loads += 1
-                            elif sub_status == constants.STATUS_ERROR:
-                                failed_sub_loads +=1 # Count sub-file parsing errors
-
-                        if at_least_one_sub_db_loaded:
-                            move_to_local_processed = True
-                            overall_status = constants.STATUS_SUCCESS # Mark ZIP as success if at least one sub-file loaded
-                            overall_message = f"ZIP '{filename}' 處理完成。成功載入資料庫: {successful_sub_loads} 個子項目, 處理/解析失敗: {failed_sub_loads} 個子項目。"
-                        else:
-                            overall_status = constants.STATUS_ERROR # All sub-files failed to load or parse
-                            overall_message = f"ZIP '{filename}' 所有可處理的子項目均處理失敗或資料庫載入失敗 ({failed_sub_loads} 個失敗)。"
-
-
-                elif overall_status == constants.STATUS_SUCCESS: # Single file success from parser
-                    parquet_path = result_item.get("parquet_path")
-                    table_name = result_item.get("table_name")
-                    if parquet_path and table_name:
+                    if not invalid_df.empty:
+                        self.logger.warning(f"檔案 '{filename}' 中有 {len(invalid_df)} 行數據未通過驗證，將移至隔離資料庫表。")
                         try:
-                            self.db_loader.load_parquet(table_name, parquet_path)
-                            self.logger.info(f"檔案 '{filename}' 資料成功載入本地資料庫。")
-                            move_to_local_processed = True
-                        except Exception as db_e:
-                            self.logger.error(f"檔案 '{filename}' (Parquet: {parquet_path}) 資料載入本地資料庫失敗: {db_e}")
-                            overall_status = constants.STATUS_ERROR # Update status due to DB error
-                            overall_message = f"資料庫載入失敗: {db_e}"
+                            invalid_parquet_path = self._dataframe_to_temp_parquet(invalid_df, "quarantine", filename)
+                            self.db_loader.load_parquet("quarantine_data", str(invalid_parquet_path))
+                            self.logger.info(f"已將 {len(invalid_df)} 行無效數據從 '{filename}' 載入至 'quarantine_data' 表。")
+                            # Optionally, delete invalid_parquet_path here if it's truly temporary for this stage
+                            # For now, it will be cleaned up with the temp_intermediate_parquets directory
+                        except Exception as e_quarantine:
+                            self.logger.error(f"將 '{filename}' 的無效數據載入至隔離區時失敗: {e_quarantine}")
+                            # Decide if this failure should mark the whole file as error or just log.
+                            # For now, we log and proceed with valid data if any.
+
+                    if valid_df.empty:
+                        self.logger.warning(f"檔案 '{filename}' 經過驗證後，沒有有效的數據可載入主表。")
+                        final_overall_status_for_file = constants.STATUS_ERROR # Or a new status like "all_rows_quarantined"
+                        final_overall_message_for_file = f"所有數據行均未通過驗證 (原始訊息: {current_message})"
+                        # Original file will go to quarantine
                     else:
-                        self.logger.error(f"檔案 '{filename}' 解析成功但缺少 Parquet 路徑或表格名稱。")
-                        overall_status = constants.STATUS_ERROR
-                        overall_message = "解析成功但缺少 Parquet 路徑或表格名稱。"
+                        self.logger.info(f"檔案 '{filename}' 有 {len(valid_df)} 行有效數據準備載入主表 '{db_target_table}'。")
+                        try:
+                            # Save valid_df to a new Parquet file for loading
+                            valid_parquet_path = self._dataframe_to_temp_parquet(valid_df, "valid", filename)
+                            self.db_loader.load_parquet(db_target_table, str(valid_parquet_path))
+                            self.logger.info(f"成功將 {len(valid_df)} 行有效數據從 '{filename}' 載入至主表 '{db_target_table}'。")
+                            move_original_to_processed = True
+                            # final_overall_status_for_file remains SUCCESS
+                            final_overall_message_for_file = f"成功處理並載入 {len(valid_df)} 行有效數據。"
+                            if not invalid_df.empty:
+                                final_overall_message_for_file += f" {len(invalid_df)} 行數據被隔離。"
+                        except Exception as e_load_valid:
+                            self.logger.error(f"載入 '{filename}' 的有效數據至主表 '{db_target_table}' 時失敗: {e_load_valid}")
+                            final_overall_status_for_file = constants.STATUS_ERROR
+                            final_overall_message_for_file = f"有效數據載入失敗 (原始訊息: {current_message}, 載入錯誤: {e_load_valid})"
+                            move_original_to_processed = False # Do not move to processed if DB load failed
 
-                # else: overall_status is already ERROR from parsing stage, no DB load attempt
+                elif current_status == constants.STATUS_SUCCESS and (parsed_df is None or parsed_df.empty):
+                    self.logger.warning(f"檔案 '{filename}' 解析成功但無數據，將跳過載入。")
+                    final_overall_status_for_file = constants.STATUS_SKIPPED # Or SUCCESS if empty is fine
+                    final_overall_message_for_file = "解析成功但無數據可載入。"
+                    # File itself might be moved to processed if this is considered a success.
+                    move_original_to_processed = True # Assuming empty file that matches schema is "processed"
 
-                # Move original file based on final overall_status
-                if original_file_path.exists(): # Check if file still exists (it should)
-                    if move_to_local_processed and overall_status == constants.STATUS_SUCCESS:
+                elif current_status == constants.STATUS_SKIPPED:
+                    # File was skipped by parser (e.g. already in manifest), message is from parser
+                    pass # Keep status and message, no file move based on this loop, original file is not in local input
+
+                else: # Initial status was ERROR or other non-SUCCESS
+                    self.logger.warning(f"檔案 '{filename}' 在解析階段已標記為 '{current_status}'，將不進行資料庫載入。")
+                    # Message and status are already set from parsing result.
+
+                # Move original file (if it exists in local input, i.e., not skipped by manifest at parallel stage)
+                if original_file_path.exists():
+                    if move_original_to_processed and final_overall_status_for_file == constants.STATUS_SUCCESS:
                         try:
                             shutil.move(str(original_file_path), str(self.local_processed_path / filename))
-                            self.logger.info(f"檔案 '{filename}' 已處理並移動至本地 -> {self.local_processed_path}")
+                            self.logger.info(f"原始檔案 '{filename}' 已移至本地 processed 資料夾。")
                         except Exception as move_e:
-                            self.logger.error(f"移動檔案 '{filename}' 至本地 {self.local_processed_path} 失敗: {move_e}")
-                            overall_status = constants.STATUS_ERROR # Revert status if move fails
-                            overall_message += f" 但移至本地已處理資料夾失敗: {move_e}"
-                    else: # Not success or not moved to processed (i.e. error or skip that wasn't parsing success)
-                        # Ensure final status is error if not skipped and not success
-                        if overall_status != constants.STATUS_SKIPPED : overall_status = constants.STATUS_ERROR
-                        try:
+                            self.logger.error(f"移動原始檔案 '{filename}' 至本地 processed 資料夾失敗: {move_e}")
+                            final_overall_status_for_file = constants.STATUS_ERROR
+                            final_overall_message_for_file += f" 但移至 processed 失敗: {move_e}"
+                    else: # Not success or not designated for processed folder
+                         if final_overall_status_for_file != constants.STATUS_SKIPPED: # Don't force error if it was just a skip
+                            final_overall_status_for_file = constants.STATUS_ERROR
+                         try:
                             shutil.move(str(original_file_path), str(self.local_quarantine_path / filename))
-                            self.logger.warning(f"檔案 '{filename}' 移動至本地隔離區 -> {self.local_quarantine_path} (原因: {overall_message})")
-                        except Exception as move_e:
-                            self.logger.error(f"移動檔案 '{filename}' 至本地 {self.local_quarantine_path} 失敗: {move_e}")
-                else:
-                    self.logger.warning(f"原始檔案 {original_file_path} 在嘗試移動前已不存在。可能在並行處理中被錯誤處理。")
+                            self.logger.warning(f"原始檔案 '{filename}' 已移至本地 quarantine 資料夾。原因: {final_overall_message_for_file}")
+                         except Exception as move_e:
+                            self.logger.error(f"移動原始檔案 '{filename}' 至本地 quarantine 資料夾失敗: {move_e}")
 
-                # Update manifest using the final status and message
-                # Pass file_hash from the result_item, original_filename is just filename
+                # Update Manifest
                 self.manifest_manager.update_manifest(
-                    str(original_file_path), # Path for hashing if needed, though hash is already available
-                    overall_status,
-                    overall_message,
-                    original_filename=filename,
+                    str(original_file_path), # Path for hashing or identification
+                    final_overall_status_for_file,
+                    final_overall_message_for_file,
+                    original_filename=filename, # This is display_name
                     file_hash_override=file_hash
                 )
-                self.logger.info(f"--- 檔案結果處理完畢: {filename} (最終狀態記錄: {overall_status}) ---")
+                self.logger.info(f"--- 檔案 '{filename}' 處理完畢。最終狀態: {final_overall_status_for_file} ---")
+            self.logger.info("所有檔案解析結果處理完成。")
 
-            self.logger.info("串列處理檔案解析結果完成。")
+            # Cleanup temp intermediate parquets dir
+            temp_intermediate_parquets_dir = self.local_project_path / "temp_intermediate_parquets"
+            if temp_intermediate_parquets_dir.exists():
+                try:
+                    shutil.rmtree(temp_intermediate_parquets_dir)
+                    self.logger.info(f"臨時 Parquet 資料夾 {temp_intermediate_parquets_dir} 已清理。")
+                except Exception as e_clean_temp:
+                    self.logger.warning(f"清理臨時 Parquet 資料夾 {temp_intermediate_parquets_dir} 失敗: {e_clean_temp}")
 
-            # D. 結束時同步 (Sync from Local to Remote)
+            # D. End-of-run Sync (Local to Remote)
             self.logger.info("--- 開始結束時同步 (本地 -> 遠端) ---")
             self._sync_file(self.local_database_file, self.remote_database_file, "to_remote")
             self._sync_file(self.local_manifest_file, self.remote_manifest_file, "to_remote")

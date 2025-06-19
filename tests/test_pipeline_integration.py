@@ -48,9 +48,16 @@ def test_pipeline_full_run(tmp_path):
         "database_name": test_db_name,
         "log_name": test_log_name,
         "local_workspace": str(local_workspace_root_path),
-        "remote_base_path": str(remote_drive_base_path), # Should match orchestrator's base_path if GDrive is simulated
-        "max_workers": 4, # Ensure parallelism is triggered but not excessive for tests
-        "directories": dir_config
+        "remote_base_path": str(remote_drive_base_path),
+        "max_workers": 4,
+        "directories": dir_config,
+        "validation_rules": { # Added validation rules
+            "default_daily": { # Assuming 'default_daily' is the matched_schema_name for these CSVs
+                "trading_date": {"non_null": True},
+                "volume": {"min_value": 0},
+                "close": {"non_null": True}
+            }
+        }
     }
     temp_config_file = tmp_path / "test_config.yaml"
     with open(temp_config_file, 'w', encoding='utf-8') as f:
@@ -102,6 +109,19 @@ def test_pipeline_full_run(tmp_path):
             "outcome": pipeline_constants.STATUS_ERROR,
             "reason_contains": "欄位重命名後，檔案 'completely_unidentifiable.csv' 內容與 schema 'default_daily' 的目標欄位不符",
             "in_quarantine": True
+        },
+        "invalid_data_test_daily": { # New entry for the file with invalid data
+            "source_fixture": "csvs/normal_utf8_with_invalid_data.csv",
+            "input_filename": "normal_utf8_with_invalid_data.csv",
+            # Expect overall success if at least one row is valid and loaded.
+            # The orchestrator's final status for a file depends on if *any* part of it was successfully processed
+            # and loaded, even if other parts were quarantined.
+            "outcome": pipeline_constants.STATUS_SUCCESS,
+            "table": "fact_daily_ohlc", # Main table for valid data
+            "rows": 1, # Only 1 out of 3 rows is valid in the new fixture
+            "in_processed": True, # The original file should be moved to processed
+            "quarantine_table_name": "quarantine_data", # Table for invalid data
+            "quarantined_rows": 2 # 2 out of 3 rows are invalid
         }
     }
 
@@ -209,40 +229,72 @@ def test_pipeline_full_run(tmp_path):
 
 
         # Verify Database Content (Aggregated) from simulated remote DB
-        expected_rows_per_table = {}
-        for _, expec_details in fixture_expectations.items():
-            if expec_details.get("outcome") == pipeline_constants.STATUS_SUCCESS:
+        expected_rows_main_tables = {}
+        expected_rows_quarantine_table = 0
+
+        for key, expec_details in fixture_expectations.items():
+            if expec_details.get("outcome") == pipeline_constants.STATUS_SUCCESS: # Or other status indicating some processing occurred
                 if "table" in expec_details and "rows" in expec_details:
                     table_name = expec_details["table"]
                     rows = expec_details["rows"]
-                    expected_rows_per_table[table_name] = expected_rows_per_table.get(table_name, 0) + rows
-                # Note: Sub-file success contributing to DB currently assumes the ZIP itself is marked success.
-                # If a ZIP is error but one sub-file was parsed and loaded before error, this might need adjustment.
-                # Based on current orchestrator logic, if a ZIP has any sub-file DB load, it's marked success.
-                # If all sub-files fail to load to DB (even if parsed), ZIP is error.
-                if "subfile_results" in expec_details and expec_details.get("outcome") == pipeline_constants.STATUS_SUCCESS :
-                     for sub_exp in expec_details["subfile_results"]:
-                        if sub_exp.get("status") == pipeline_constants.STATUS_SUCCESS and \
-                           "table" in sub_exp and "rows" in sub_exp:
-                            table_name = sub_exp["table"]
-                            rows = sub_exp["rows"]
-                            expected_rows_per_table[table_name] = expected_rows_per_table.get(table_name, 0) + rows
+                    if rows > 0 : # Only add if expecting rows in main table
+                         expected_rows_main_tables[table_name] = expected_rows_main_tables.get(table_name, 0) + rows
+
+                # Accumulate expected quarantined rows from this file
+                if "quarantined_rows" in expec_details and expec_details["quarantined_rows"] > 0:
+                    expected_rows_quarantine_table += expec_details["quarantined_rows"]
+
+            # For sub-files in ZIPs that might contribute to main/quarantine tables
+            # This part needs careful thought if a ZIP can have partially valid/invalid content
+            # and how that's aggregated or reported.
+            # For now, the `zip_with_normal_daily_content_fails` fixture expects the whole ZIP to be quarantined
+            # and its sub-file failure is part of the reason.
+            # If a ZIP could have some valid data loaded and some quarantined, `fixture_expectations` would need
+            # to be more granular for ZIPs. The current `invalid_data_test_daily` is a direct CSV.
 
         tables_in_db_query_res = con.execute("SHOW TABLES;").fetchall()
         db_tables_present = [tbl[0] for tbl in tables_in_db_query_res]
 
-        if not expected_rows_per_table: # If no files were expected to succeed
-            # assert not db_tables_present, "資料庫中不應建立任何資料表，但找到了。"
-            # Allow empty tables if DB file is created but no data loaded
+        # Verify main tables
+        if not expected_rows_main_tables:
+            # If no files were expected to produce valid data for main tables
+            # We might still have the tables created (e.g. fact_daily_ohlc) but they'd be empty.
+            # Or, if a schema was never matched, the table might not be created.
+            # For this test, 'fact_daily_ohlc' should be created by 'normal_daily_direct' or 'invalid_data_test_daily'.
             pass
         else:
-            for table_name, total_expected_rows in expected_rows_per_table.items():
-                assert table_name in db_tables_present, f"資料表 '{table_name}' 應已在模擬遠端資料庫中建立"
+            for table_name, total_expected_rows in expected_rows_main_tables.items():
+                assert table_name in db_tables_present, f"主資料表 '{table_name}' 應已在模擬遠端資料庫中建立"
                 result_row_count_query = con.execute(f"SELECT COUNT(*) FROM \"{table_name}\"").fetchone()
-                assert result_row_count_query is not None, f"無法從資料表 '{table_name}' 取得筆數"
+                assert result_row_count_query is not None, f"無法從主資料表 '{table_name}' 取得筆數"
                 actual_rows = result_row_count_query[0]
                 assert actual_rows == total_expected_rows, \
-                    f"資料表 '{table_name}' 中應包含 {total_expected_rows} 筆數據, 實際為 {actual_rows} (在模擬遠端)"
+                    f"主資料表 '{table_name}' 中應包含 {total_expected_rows} 筆數據, 實際為 {actual_rows} (在模擬遠端)"
+
+        # Verify quarantine_data table
+        quarantine_table_name_const = "quarantine_data" # As defined in schemas.json
+        if expected_rows_quarantine_table > 0:
+            assert quarantine_table_name_const in db_tables_present, \
+                f"隔離資料表 '{quarantine_table_name_const}' 應已建立，因為預期有 {expected_rows_quarantine_table} 行隔離數據。"
+            q_count_query = con.execute(f"SELECT COUNT(*) FROM \"{quarantine_table_name_const}\"").fetchone()
+            assert q_count_query is not None, f"無法從隔離資料表 '{quarantine_table_name_const}' 取得筆數"
+            actual_quarantined_rows = q_count_query[0]
+            assert actual_quarantined_rows == expected_rows_quarantine_table, \
+                f"隔離資料表 '{quarantine_table_name_const}' 中應包含 {expected_rows_quarantine_table} 筆數據, 實際為 {actual_quarantined_rows}"
+
+            # Optional: Verify content of a quarantined row
+            if "invalid_data_test_daily" in fixture_expectations: # Check one specific file's quarantined data
+                q_rows_df = con.execute(f"SELECT source_file, quarantine_reason FROM \"{quarantine_table_name_const}\" WHERE source_file = 'normal_utf8_with_invalid_data.csv'").df()
+                assert len(q_rows_df) == fixture_expectations["invalid_data_test_daily"]["quarantined_rows"]
+                # Check specific reasons (example for the first quarantined row from that file)
+                first_q_reason = q_rows_df['quarantine_reason'].iloc[0]
+                assert ("Column 'volume': is less than 0" in first_q_reason or \
+                        "Column 'trading_date': is null" in first_q_reason)
+
+        elif quarantine_table_name_const in db_tables_present : # Table exists but should be empty
+             q_count_query = con.execute(f"SELECT COUNT(*) FROM \"{quarantine_table_name_const}\"").fetchone()
+             if q_count_query is not None and q_count_query[0] > 0:
+                  pytest.fail(f"隔離資料表 '{quarantine_table_name_const}' 應為空，但找到 {q_count_query[0]} 行。")
 
     except Exception as e:
         # print full manifest content for debugging if an assertion fails
