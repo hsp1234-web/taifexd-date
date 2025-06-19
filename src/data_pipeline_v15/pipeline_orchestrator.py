@@ -4,7 +4,8 @@ import json
 # import logging
 import os
 import shutil
-# import sys
+import sys # Added for stderr in version loading fallback
+import importlib.metadata # Added for version loading
 # import threading
 # import time
 import traceback
@@ -36,7 +37,8 @@ class PipelineOrchestrator:
                  schemas_config_path: str = "config/schemas.json",  # Relative to package root
                  duckdb_memory_limit_gb: int = 4, duckdb_threads: int = -1, # -1 for auto os.cpu_count()
                  micro_batch_size: int = 20, hardware_monitor_interval: int = 2,
-                 recreate_workspace_on_run: bool = True, cleanup_workspace_on_finish: bool = False):
+                 recreate_workspace_on_run: bool = True, cleanup_workspace_on_finish: bool = False,
+                 debug_mode: bool = False):
         """初始化 PipelineOrchestrator。
         (docstring 已省略)
         """
@@ -53,6 +55,7 @@ class PipelineOrchestrator:
         self.hardware_monitor_interval = hardware_monitor_interval
         self.recreate_workspace_on_run = recreate_workspace_on_run
         self.cleanup_workspace_on_finish = cleanup_workspace_on_finish
+        self.is_debug_mode = debug_mode # Store debug_mode
 
         # Resolve paths first as logger path depends on it
         self.paths = self._resolve_paths()
@@ -60,9 +63,12 @@ class PipelineOrchestrator:
         # Setup main logger
         os.makedirs(self.paths["local_logs_dir"], exist_ok=True)
         self.log_file_path = os.path.join(self.paths["local_logs_dir"], self.log_name) # Main log file
-        self.logger = Logger(log_file_path=self.log_file_path)
+
+        # Dynamically set log level based on debug_mode
+        log_level = 'DEBUG' if self.is_debug_mode else 'INFO'
+        self.logger = Logger(log_file_path=self.log_file_path, level=log_level)
         self.logger.log(
-            f"PipelineOrchestrator (數據整合平台 v15) initialized. Logging to: {self.log_file_path}",
+            f"PipelineOrchestrator (數據整合平台 v15) initialized. Logging to: {self.log_file_path} with level: {log_level}",
             level="info",
         )
         # Log parameters used for this run
@@ -79,10 +85,24 @@ class PipelineOrchestrator:
         # Load schemas
         self.schemas = self._load_schemas()
 
-        self.hw_monitor = HardwareMonitor(
-            logger=self.logger, interval=self.hardware_monitor_interval
-        )
+        self.hw_monitor = None # Initialize to None
+        if self.is_debug_mode:
+            self.hw_monitor = HardwareMonitor(
+                logger=self.logger, interval=self.hardware_monitor_interval
+            )
         self.file_manifest = None
+
+        try:
+            # 使用先前確認的套件名稱 "data-pipeline-v15"
+            self.version = importlib.metadata.version("data-pipeline-v15")
+        except importlib.metadata.PackageNotFoundError:
+            # 如果套件未安裝或找不到版本，則設定為 "unknown"
+            self.version = "unknown"
+            if hasattr(self, 'logger') and self.logger: # 檢查 logger 是否已初始化
+                self.logger.warning("無法讀取 'data-pipeline-v15' 的版本號，可能未透過 poetry install 安裝。")
+            else: # 如果 logger 尚未初始化，則打印到 stderr
+                # import sys # Already imported at the top
+                print("警告: 無法讀取 'data-pipeline-v15' 的版本號，可能未透過 poetry install 安裝。", file=sys.stderr)
 
 
     def _load_schemas(self) -> Dict[str, Any]:
@@ -487,7 +507,8 @@ class PipelineOrchestrator:
                     level="warning",
                 )
 
-        self.hw_monitor.stop()
+        if self.is_debug_mode and self.hw_monitor:
+            self.hw_monitor.stop()
         # final_log_path = getattr(self, "main_log_file_path", self.log_file_path) # OLD, now self.log_file_path is the main one
         self.logger.log(
             f"{self.project_folder_name} (數據整合平台 v15) 已執行完畢。日誌檔案位於: {self.log_file_path}",
@@ -496,11 +517,25 @@ class PipelineOrchestrator:
 
     def run(self) -> None:
         """執行完整的數據整合管道。"""
-        self.logger.log(
-            f"{self.project_folder_name} (數據整合平台 v15) 執行開始...",
-            level="step",
+        # 準備版本與模式字串
+        version_info = ""
+        if self.is_debug_mode:
+            # 假設 self.version 已在 __init__ 中設定
+            version_string = f"v{self.version}" if self.version != "unknown" else "(版本未知)"
+            version_info = f" {version_string} (除錯模式)"
+
+        # 打印包含版本資訊的啟動橫幅
+        # 假設 self.project_folder_name 存在
+        project_name = getattr(self, 'project_folder_name', '數據整合平台') # 提供預設值以防萬一
+        self.logger.log(f"""\
+{os.linesep}
+================================================================================
+🚚 {project_name} (數據整合平台{version_info}) 執行開始...
+================================================================================"""
+            , level="step" # Keep level as step, or change to info if preferred for banner
         )
-        self.hw_monitor.start()
+        if self.is_debug_mode and self.hw_monitor:
+            self.hw_monitor.start()
         db_conn: Optional["DuckDBPyConnection"] = None
 
         try:
@@ -608,9 +643,10 @@ if __name__ == "__main__":
             zip_files="test1.zip,test2.zip", # Example
             run_mode="NORMAL",
             conflict_strategy="REPLACE",
-            schemas_config_path="config/schemas.json" # Relative to package root
+            schemas_config_path="config/schemas.json", # Relative to package root
+            debug_mode=True # Test with debug mode on
         )
-        print(f"Orchestrator 初始化成功.")
+        print(f"Orchestrator 初始化成功 (Debug Mode: {orchestrator.is_debug_mode}).")
         print(f" - 主日誌檔案位於: {orchestrator.log_file_path}")
         print(f" - 工作區路徑:")
         for key, path_val in orchestrator.paths.items():
