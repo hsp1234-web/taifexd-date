@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+from datetime import datetime # Moved here
 from typing import TYPE_CHECKING, Set, Union, Iterable # 為類型提示而添加
 
 if TYPE_CHECKING:
@@ -39,123 +40,106 @@ class ManifestManager:
         :type logger: data_pipeline_v15.utils.logger.Logger
         """
         self.path = manifest_path
-        self.logger = logger # 儲存 logger 物件
-        self.processed_hashes: Set[str] = self._load()
+        self.logger = logger
+        self.manifest_data = self._load() # Will store {"files": {identifier: {status, message, original_filename}}}
 
     def load_or_create_manifest(self) -> None:
         """
         Ensures the manifest file exists and is loaded.
         If the manifest file does not exist, it creates an empty one.
-        Loading (or re-loading) of hashes also occurs.
         """
         if not os.path.exists(self.path):
             self.logger.info(f"Manifest file '{self.path}' not found. Creating a new empty manifest.")
-            self.processed_hashes = set() # Start with an empty set of hashes
-            self._save() # Save the empty manifest, this creates the file with {"hashes": []}
+            self.manifest_data = {"files": {}}
+            self._save()
         else:
-            # File exists, load it. This is already done by __init__ if path existed then,
-            # but this makes load_or_create_manifest idempotent and usable for re-loading.
-            self.processed_hashes = self._load()
+            # File exists, load it. This is already done by __init__ if path existed then.
+            self.manifest_data = self._load() # Ensure it's loaded if it existed.
+            if not isinstance(self.manifest_data.get("files"), dict): # Ensure "files" key exists and is a dict
+                self.logger.warning(f"Manifest file '{self.path}' is missing 'files' dictionary or it's malformed. Initializing with empty 'files'.")
+                self.manifest_data = {"files": {}}
+                self._save() # Save corrected structure
             self.logger.info(f"Manifest file '{self.path}' loaded.")
 
-    def update_manifest(self, filename: str, status: str, message: str) -> None:
+    def update_manifest(self, file_identifier_for_hash: str, status: str, message: str, original_filename: str = None) -> None:
         """
-        Updates the manifest based on the processing status of a file.
-        If successful, the file's hash is added to the processed list.
-        Logs the outcome.
+        Updates the manifest with the processing status of a file.
+        Uses file hash as key for successful records, otherwise uses original_filename.
 
         Args:
-            filename (str): The name of the file being processed. Note: this is the basename.
-                            The actual path for hashing might need context if not unique.
-                            For now, we assume it's just recorded as is or a placeholder.
-            status (str): The status of the processing (e.g., "SUCCESS", "ERROR").
+            file_identifier_for_hash (str): The path to the file used for generating a hash if successful.
+                                            If hashing fails or status is not success, original_filename is used as key.
+            status (str): The status of the processing (e.g., "SUCCESS", "ERROR", "SKIPPED").
             message (str): A message describing the outcome.
+            original_filename (str, optional): The original basename of the file. If None, derived from file_identifier_for_hash.
         """
-        # In a real scenario, we'd get a unique identifier for the file,
-        # typically a hash of its content or full path.
-        # For the purpose of this method matching the orchestrator's call signature,
-        # we'll use the filename as a proxy for the item to be recorded if successful.
-        # The actual PipelineOrchestrator might need to pass a hash if that's the key.
+        if original_filename is None:
+            original_filename = os.path.basename(file_identifier_for_hash)
 
-        self.logger.info(f"Manifest update for '{filename}': Status - {status}, Message - {message}")
+        key_to_use = None
+        # PipelineOrchestrator passes filename (basename) as file_identifier_for_hash
+        # We need the full path for hashing, which is available in PipelineOrchestrator.
+        # For now, this method will use original_filename as key if hashing `file_identifier_for_hash` fails.
+        # This means PipelineOrchestrator should pass the *full path* as `file_identifier_for_hash`
+        # if it wants hashing to be attempted.
 
-        # Assuming constants.STATUS_SUCCESS is available or comparing with string
-        # from .core import constants # Would be needed if using constants.STATUS_SUCCESS
-        if status == "SUCCESS": # Replace "SUCCESS" with actual constant if available
-            # If filename itself is not the hash, this logic needs adjustment.
-            # The current add_processed_hashes expects a hash or list of hashes.
-            # This is a simplification to match the orchestrator's current call.
-            # A more robust solution would involve hashing `filename` if it's a path,
-            # or the orchestrator providing the hash.
-            # For now, let's assume filename can be added if it's a unique ID.
-            # However, add_processed_hashes expects a hash. This highlights a design mismatch.
-            # Let's log and *not* add the raw filename if it's not a hash.
-            # A placeholder for what should happen:
-            file_identifier = self.get_file_hash(filename) # This would fail if filename is not a path
-            if file_identifier: # Or if status indicates success and an identifier exists
-                 self.add_processed_hashes(file_identifier)
-                 self.logger.debug(f"File '{filename}' (hash: {file_identifier}) marked as processed.")
-            elif status == "SUCCESS": # If it was success but we couldn't get an identifier
-                 self.logger.warning(f"File '{filename}' reported success, but no hash obtained to update manifest. Manifest not updated with this item.")
-        # No specific action for error/other statuses other than logging, already done.
-        # The manifest primarily tracks *successfully* processed items by hash.
+        if status == "SUCCESS": # Replace with constants.STATUS_SUCCESS
+            # For successful files, the key should ideally be the hash of the file *content*.
+            # PipelineOrchestrator calls update_manifest with the *original input file path* (or just filename).
+            # We should use the hash of this input file path.
+            file_hash = self.get_file_hash(file_identifier_for_hash) # file_identifier_for_hash should be full path
+            if file_hash:
+                key_to_use = file_hash
+                self.logger.debug(f"File '{original_filename}' (hash: {file_hash}) will be updated in manifest.")
+            else: # Should not happen if file_identifier_for_hash is a valid path to an existing file.
+                self.logger.warning(f"Could not generate hash for successful file '{original_filename}' (path: {file_identifier_for_hash}). Using filename as key.")
+                key_to_use = original_filename
+        else: # For ERROR, SKIPPED, etc.
+            key_to_use = original_filename # Use the original filename as the key
 
-    def _load(self) -> Set[str]:
-        """從指定的路徑載入已處理的檔案雜湊值清單。
+        self.manifest_data["files"][key_to_use] = {
+            "status": status,
+            "message": message,
+            "original_filename": original_filename, # Store original filename for easier debugging
+            "timestamp": datetime.now().isoformat() # Add timestamp
+        }
+        self.logger.info(f"Manifest update for '{original_filename}' (key: {key_to_use}): Status - {status}, Message - {message}")
+        self._save()
 
-        如果檔案不存在，則返回空集合。
-        如果在讀取或解析現有檔案時發生任何錯誤，則會記錄錯誤並回傳一個空集合。
+    def _load(self) -> dict:
+        """從指定的路徑載入 manifest data。
 
-        :meta private:
-        :return: 一個包含已處理檔案雜湊值的集合。
-        :rtype: set[str]
+        如果檔案不存在，則返回 {"files": {}}。
+        如果在讀取或解析現有檔案時發生任何錯誤，則會記錄錯誤並回傳 {"files": {}}。
         """
         if not os.path.exists(self.path):
-            # 檔案不存在是預期情況（例如首次執行），返回空集合。
-            # self.logger.log(f"Manifest 檔案 '{self.path}' 不存在，將開始一個新的清單。", level="info") # 可選日誌
-            return set()
-
+            return {"files": {}}
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # 從 'hashes' 鍵獲取列表，如果鍵不存在或其值不是列表（不太可能但防禦性），則data.get的結果可能是None或非列表
-                # set() 構造函數可以處理可迭代對象，包括空列表。如果data.get返回None，set(None)會拋錯。
-                # 因此，確保data.get的後備值是空列表[]
-                hashes_list = data.get("hashes", [])
-                if not isinstance(hashes_list, list):
-                    self.logger.warning(f"Manifest 檔案 '{self.path}' 中的 'hashes' 鍵並非一個列表，已將其視為空清單。")
-                    return set()
-                return set(hashes_list)
-        except Exception as e: # 捕捉讀取或解析現有檔案時的任何錯誤
+                if not isinstance(data, dict) or not isinstance(data.get("files"), dict):
+                    self.logger.warning(f"Manifest file '{self.path}' is malformed. Initializing with empty 'files'.")
+                    return {"files": {}}
+                return data
+        except Exception as e:
             self.logger.error(f"載入 Manifest 檔案 '{self.path}' 時發生錯誤: {e}")
-            return set() # 在發生錯誤時，保證返回空集合
+            return {"files": {}} # Return empty structure on error
 
     def _save(self) -> None:
-        """將目前已處理的檔案雜湊值集合儲存到清單檔案中。
-
-        雜湊值會以 JSON 格式儲存，包含一個 'hashes' 鍵，其值為雜湊值列表。
-        儲存前會確保目標目錄存在。為了方便閱讀和版本控制，
-        JSON 檔案會以縮排格式儲存，並且雜湊值列表會先排序。
-        如果儲存過程中發生任何錯誤，錯誤將被記錄。
-
-        :meta private:
+        """將目前的 manifest_data 儲存到清單檔案中。
         """
         try:
+            print(f"DEBUG_MANIFEST: Saving manifest to: {self.path}") # DEBUG line
+            print(f"DEBUG_MANIFEST: Data being saved: {self.manifest_data}") # DEBUG line
             manifest_dir = os.path.dirname(self.path)
-            if not manifest_dir: # 處理 self.path 僅為檔名的情況
+            if not manifest_dir:
                 manifest_dir = "."
             os.makedirs(manifest_dir, exist_ok=True)
 
             with open(self.path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {"hashes": sorted(list(self.processed_hashes))},
-                    f,
-                    indent=2,
-                    ensure_ascii=False,
-                )
+                json.dump(self.manifest_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             self.logger.error(f"儲存 Manifest 檔案 '{self.path}' 時發生錯誤: {e}")
-            # 錯誤已被記錄。依照作業描述，方法正常結束。
 
     @staticmethod
     def get_file_hash(file_path: str) -> Union[str, None]:
@@ -168,44 +152,53 @@ class ManifestManager:
         :return: 檔案的 SHA256 雜湊值（十六進位字串），如果檔案未找到或讀取錯誤則回傳 None。
         :rtype: str or None
         """
-        sha256 = hashlib.sha256()
+        # Ensure file_path is a valid string path and exists before hashing
+        if not isinstance(file_path, (str, bytes, os.PathLike)) or not os.path.exists(file_path) or not os.path.isfile(file_path):
+            # self.logger.error(f"File not found, not a file, or invalid path type for hashing: {file_path}") # Instance method needs logger
+            # For static method, can't use self.logger. Consider logging if logger is passed or raise error.
+            return None
+
+        sha256_hash = hashlib.sha256()
         try:
             with open(file_path, "rb") as f:
-                while True:
-                    chunk = f.read(8192)
-                    if not chunk:
-                        break
-                    sha256.update(chunk)
-            return sha256.hexdigest()
-        except FileNotFoundError:
-            return None
-        except IOError as e:  # 處理讀取時其他潛在的 IOError
-            # print(f"IOError while hashing file {file_path}: {e}")
-            # 如果傳入了 logger，可以在此處使用，或引發錯誤
+                while chunk := f.read(8192): # PEP 572: Assignment expressions
+                    sha256_hash.update(chunk)
+            return sha256_hash.hexdigest()
+        except IOError: # Catches FileNotFoundError as well if path is invalid despite os.path.exists
+            # Consider logging here if a logger was passed or accessible
             return None
 
-    def has_been_processed(self, file_hash: str) -> bool:
-        """檢查指定的檔案雜湊值是否已經被處理過。
 
-        :param file_hash: 要檢查的檔案雜湊值。
-        :type file_hash: str
-        :return: 如果雜湊值存在於已處理清單中，則回傳 True，否則回傳 False。
-        :rtype: bool
+    def has_been_processed(self, file_hash_or_name: str) -> bool:
         """
-        return file_hash in self.processed_hashes
-
-    def add_processed_hashes(self, hashes_to_add: Union[str, Iterable[str]]) -> None:
-        """將一組新的雜湊值添加到已處理清單中並儲存。
-
-        這個方法會更新 self.processed_hashes 集合，然後呼叫 _save() 方法
-        將更新後的集合持久化到檔案中。
-
-        :param hashes_to_add: 一個包含要添加的檔案雜湊值的字串，或可迭代物件 (例如列表或集合)。
-        :type hashes_to_add: str or collections.abc.Iterable[str]
+        Checks if a file (identified by hash for successes, or name for errors/skips)
+        has a 'success' record in the manifest.
+        This method is primarily for checking if a file was *successfully* processed before.
+        Args:
+            file_hash_or_name (str): The file hash (for successful files) or filename.
+        Returns:
+            bool: True if the file has a "SUCCESS" status in the manifest, False otherwise.
         """
-        # 確保 hashes_to_add 是可迭代的，即使它只是一個雜湊字串
-        if isinstance(hashes_to_add, str):
-            self.processed_hashes.add(hashes_to_add)
-        else:  # 假設它是一個可迭代物件 (例如列表、集合)
-            self.processed_hashes.update(hashes_to_add)
-        self._save()
+        entry = self.manifest_data.get("files", {}).get(file_hash_or_name)
+        if entry and entry.get("status") == "SUCCESS": # Replace with constants.STATUS_SUCCESS
+            return True
+        return False
+
+    # add_processed_hashes is no longer directly used by orchestrator; update_manifest handles saving.
+    # It could be kept for other uses or removed if manifest structure is now solely managed by update_manifest.
+    # For now, let's comment it out to avoid confusion with the new manifest structure.
+    # def add_processed_hashes(self, hashes_to_add: Union[str, Iterable[str]]) -> None:
+    #     """將一組新的雜湊值添加到已處理清單中並儲存。
+    #
+    #     這個方法會更新 self.processed_hashes 集合，然後呼叫 _save() 方法
+    #     將更新後的集合持久化到檔案中。
+    #
+    #     :param hashes_to_add: 一個包含要添加的檔案雜湊值的字串，或可迭代物件 (例如列表或集合)。
+    #     :type hashes_to_add: str or collections.abc.Iterable[str]
+    #     """
+    #     # 確保 hashes_to_add 是可迭代的，即使它只是一個雜湊字串
+    #     if isinstance(hashes_to_add, str):
+    #         self.processed_hashes.add(hashes_to_add)
+    #     else:  # 假設它是一個可迭代物件 (例如列表、集合)
+    #         self.processed_hashes.update(hashes_to_add)
+    #     self._save()

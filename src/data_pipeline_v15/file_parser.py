@@ -4,6 +4,7 @@ import os
 import zipfile
 import hashlib
 from io import BytesIO
+import io # Added
 import pandas as pd
 from .core import constants # 修改：導入常數
 
@@ -118,7 +119,9 @@ class FileParser:
 
             # Content-based schema detection
             # Use self.schemas_config instead of local variable
+            attempted_schemas = [] # Initialize list to store attempted schemas
             for schema_name, schema_def in self.schemas_config.items():
+                attempted_schemas.append(schema_name) # Record schema name
                 keywords = schema_def.get("keywords", [])
                 if not keywords:
                     continue
@@ -142,16 +145,18 @@ class FileParser:
                 # detected_encoding remains None, pd.read_csv will try its list
 
             if not matched_schema_name:
-                self.logger.warning(f"檔案 '{display_name}' 無法根據內容關鍵字匹配到任何 schema，且無 default_daily 後備。")
+                log_msg = f"檔案 '{display_name}' 無法匹配任何 schema。已嘗試匹配: {', '.join(attempted_schemas) if attempted_schemas else '無可用 schema'}，且無 default_daily 後備或 default_daily 嘗試失敗。"
+                self.logger.warning(log_msg)
                 return {
                     constants.KEY_STATUS: constants.STATUS_SKIPPED,
                     constants.KEY_FILE: display_name,
-                    constants.KEY_REASON: "無法根據內容關鍵字識別檔案類型或匹配任何已知的 schema。",
+                    constants.KEY_REASON: f"無法根據內容關鍵字識別檔案類型。已嘗試匹配 schema: {', '.join(attempted_schemas) if attempted_schemas else '無可用 schema'}。",
                 }
 
             # Proceed with parsing using pandas
             df = None
             error_messages = []
+            print(f"DBG: Initial detected_encoding: {detected_encoding} for {display_name}")
 
             # Use detected_encoding first if available, otherwise try all
             pandas_encodings_to_try = [detected_encoding] + encodings_to_try if detected_encoding else encodings_to_try
@@ -159,16 +164,37 @@ class FileParser:
             for enc in pandas_encodings_to_try:
                 if enc is None: continue # Skip if detected_encoding was None and is first in list
                 try:
+                    input_for_pandas = None
                     if isinstance(file_input, BytesIO):
                         file_input.seek(0) # Reset for each read attempt
-                    # Pass file_input (path or BytesIO) directly to pandas
-                    df = pd.read_csv(file_input, low_memory=False, encoding=enc, on_bad_lines="skip")
+                        csv_bytes = file_input.read()
+                        try:
+                            # Use the current encoding `enc` from the loop for decoding
+                            csv_string = csv_bytes.decode(enc)
+                            if csv_string.startswith('\ufeff'): # Check for BOM
+                                self.logger.debug(f"DBG: Found BOM for {display_name} with encoding {enc}, removing it.")
+                                csv_string = csv_string[1:]
+                            print(f"DBG_CSV_STRING for {display_name} with {enc}:\n'''{csv_string[:500]}'''") # Print first 500 chars
+                            input_for_pandas = io.StringIO(csv_string)
+                            file_input.seek(0) # Reset again if other parts of the code re-read file_input
+                        except UnicodeDecodeError as ude_detail:
+                            self.logger.debug(f"DBG: Failed to decode BytesIO with {enc} for {display_name}: {ude_detail}")
+                            error_messages.append(f"使用 {enc} 編碼解碼 BytesIO 失敗: {ude_detail}")
+                            continue # Try next encoding
+                    else: # It's a file path (string)
+                        input_for_pandas = file_input
+
+                    df = pd.read_csv(input_for_pandas, low_memory=False, encoding=enc if isinstance(input_for_pandas, str) else None, on_bad_lines="skip")
+
                     if not df.empty:
                         self.logger.info(f"成功使用編碼 '{enc}' 讀取檔案 '{display_name}'。")
+                        print(f"DBG: Columns after pd.read_csv with {enc}: {df.columns.tolist()} for {display_name}")
                         break
                     else:
-                        error_messages.append(f"使用 {enc} 編碼讀取後檔案為空")
-                except UnicodeDecodeError:
+                        # If df is empty, it could be due to on_bad_lines='skip' removing all lines.
+                        # Or the file was genuinely empty of data.
+                        error_messages.append(f"使用 {enc} 編碼讀取後檔案為空或所有行均格式錯誤")
+                except UnicodeDecodeError: # This might still be hit if input_for_pandas is a path and encoding is wrong
                     error_messages.append(f"使用 {enc} 編碼解碼失敗")
                 except pd.errors.EmptyDataError:
                     error_messages.append(f"使用 {enc} 編碼時檔案為空 (EmptyDataError)")
@@ -191,13 +217,17 @@ class FileParser:
                     constants.KEY_REASON: f"Schema '{matched_schema_name}' 未定義或其 column_map 為空", # This error message is fine
                 }
             df.rename(columns=lambda c: str(c).strip().lower(), inplace=True)
+            print(f"DBG: Columns after strip().lower(): {df.columns.tolist()} for {display_name}")
             column_map = {
                 alias.lower(): target_col_name
                 for target_col_name, details in schema["columns_map"].items()
                 for alias in details.get("aliases", [])
             }
+            print(f"DBG: Generated column_map: {column_map} for schema {matched_schema_name} for {display_name}")
             df.rename(columns=column_map, inplace=True)
+            print(f"DBG: Columns after alias rename: {df.columns.tolist()} for {display_name}")
             target_columns = list(schema["columns_map"].keys())
+            print(f"DBG: Target columns for schema {matched_schema_name}: {target_columns} for {display_name}")
 
             # Check if any of the target columns are present after renaming
             # This is important to ensure the schema matching was meaningful
@@ -216,6 +246,7 @@ class FileParser:
 
             # --- Required columns check ---
             required_columns = schema.get("required_columns", [])
+            print(f"DBG: Required columns for schema {matched_schema_name}: {required_columns} for {display_name}")
             if required_columns:
                 empty_or_null_required_cols = []
                 for req_col in required_columns:
@@ -223,10 +254,13 @@ class FileParser:
                         # This implies 'req_col' from 'required_columns' was NOT in 'target_columns' (schema definition error)
                         # or it's a column that should have been mapped but wasn't.
                         empty_or_null_required_cols.append(f"{req_col} (definition/mapping issue, not in DataFrame columns)")
+                        print(f"DBG: Required col {req_col} not in df.columns for {display_name}. Current df columns: {df.columns.tolist()}")
                         continue
 
                     if df[req_col].isnull().all():
                         empty_or_null_required_cols.append(req_col)
+                        print(f"DBG: Required col {req_col} is all null in df for {display_name}")
+
 
                 if empty_or_null_required_cols:
                     self.logger.warning(

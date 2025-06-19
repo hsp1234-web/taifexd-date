@@ -52,7 +52,7 @@ def mock_manifest_manager():
 @pytest.fixture
 def mock_db_loader():
     loader = mock.MagicMock(spec=DatabaseLoader)
-    loader.load_data.return_value = None # Simple return
+    loader.load_parquet.return_value = None # Changed from load_data to load_parquet
     loader.close_connection.return_value = None # Simple return
     return loader
 
@@ -185,12 +185,11 @@ def test_run_success_new_file(orchestrator_instance, mock_os_tools, mock_shutil_
     expected_input_file_path = os.path.join(orchestrator_instance.input_path, test_filename)
     mock_file_parser.parse_file.assert_called_once_with(
         expected_input_file_path,
-        orchestrator_instance.processed_path, # This is the staging_dir for parser
-        orchestrator_instance.schemas_config
+        orchestrator_instance.processed_path # This is the staging_dir for parser
     )
 
     # 5. Database loader was called
-    mock_db_loader.load_data.assert_called_once_with("test_table", parsed_file_path_in_staging)
+    mock_db_loader.load_parquet.assert_called_once_with("test_table", parsed_file_path_in_staging)
 
     # 6. File was moved to processed directory
     expected_processed_file_path = os.path.join(orchestrator_instance.processed_path, test_filename)
@@ -198,9 +197,10 @@ def test_run_success_new_file(orchestrator_instance, mock_os_tools, mock_shutil_
 
     # 7. Manifest was updated with success status
     mock_manifest_manager.update_manifest.assert_called_once_with(
-        test_filename, # Orchestrator still passes filename to update_manifest
+        expected_input_file_path,
         constants.STATUS_SUCCESS,
-        mock.ANY # The exact success message can be flexible
+        mock.ANY, # The exact success message can be flexible
+        original_filename=test_filename
     )
 
     # 8. Database connection closed
@@ -247,12 +247,11 @@ def test_run_failure_new_file(orchestrator_instance, mock_os_tools, mock_shutil_
     expected_input_file_path = os.path.join(orchestrator_instance.input_path, test_filename)
     mock_file_parser.parse_file.assert_called_once_with(
         expected_input_file_path,
-        orchestrator_instance.processed_path,
-        orchestrator_instance.schemas_config
+        orchestrator_instance.processed_path
     )
 
     # 4. Database loader should NOT be called
-    mock_db_loader.load_data.assert_not_called()
+    mock_db_loader.load_parquet.assert_not_called()
 
     # 5. File was moved to quarantine directory
     expected_quarantine_file_path = os.path.join(orchestrator_instance.quarantine_path, test_filename)
@@ -260,9 +259,10 @@ def test_run_failure_new_file(orchestrator_instance, mock_os_tools, mock_shutil_
 
     # 6. Manifest was updated with error status
     mock_manifest_manager.update_manifest.assert_called_once_with(
-        test_filename,
+        expected_input_file_path,
         constants.STATUS_ERROR,
-        "Failed to parse file due to format error" # Exact reason from parser's result
+        "Failed to parse file due to format error", # Exact reason from parser's result
+        original_filename=test_filename
     )
 
     # 7. Database connection closed
@@ -298,7 +298,7 @@ def test_run_skip_already_processed_file(orchestrator_instance, mock_os_tools, m
     mock_file_parser.parse_file.assert_not_called()
 
     # 4. Database loader should NOT be called
-    mock_db_loader.load_data.assert_not_called()
+    mock_db_loader.load_parquet.assert_not_called()
 
     # 5. File should NOT be moved
     mock_shutil_move.assert_not_called()
@@ -327,7 +327,7 @@ def test_run_empty_input_directory(orchestrator_instance, mock_os_tools, mock_sh
     # 3. No processing should occur, so these should not be called:
     mock_manifest_manager.has_been_processed.assert_not_called()
     mock_file_parser.parse_file.assert_not_called()
-    mock_db_loader.load_data.assert_not_called()
+    mock_db_loader.load_parquet.assert_not_called()
     mock_shutil_move.assert_not_called()
     mock_manifest_manager.update_manifest.assert_not_called()
 
@@ -395,14 +395,13 @@ def test_run_success_zip_multiple_successful_sub_items(orchestrator_instance, mo
 
     mock_file_parser.parse_file.assert_called_once_with(
         expected_zip_input_path,
-        orchestrator_instance.processed_path,
-        orchestrator_instance.schemas_config
+        orchestrator_instance.processed_path
     )
 
     # Check DatabaseLoader calls for each successful sub-item
-    mock_db_loader.load_data.assert_any_call("table1", sub_item1_staging_path)
-    mock_db_loader.load_data.assert_any_call("table2", sub_item2_staging_path)
-    assert mock_db_loader.load_data.call_count == 2
+    mock_db_loader.load_parquet.assert_any_call("table1", sub_item1_staging_path)
+    mock_db_loader.load_parquet.assert_any_call("table2", sub_item2_staging_path)
+    assert mock_db_loader.load_parquet.call_count == 2
 
     # Check file moved to processed directory
     expected_zip_processed_path = os.path.join(orchestrator_instance.processed_path, zip_filename)
@@ -410,9 +409,10 @@ def test_run_success_zip_multiple_successful_sub_items(orchestrator_instance, mo
 
     # Check manifest updated with overall success for the ZIP
     mock_manifest_manager.update_manifest.assert_called_once_with(
-        zip_filename,
+        expected_zip_input_path, # Changed from zip_filename
         constants.STATUS_SUCCESS,
-        mock.ANY # Message can be flexible, e.g., "ZIP 'archive_multiple_ok.zip' 處理完成..."
+        mock.ANY, # Message can be flexible, e.g., "ZIP 'archive_multiple_ok.zip' 處理完成..."
+        original_filename=zip_filename
     )
     mock_db_loader.close_connection.assert_called_once()
 
@@ -467,12 +467,11 @@ def test_run_zip_partial_success_sub_items(orchestrator_instance, mock_os_tools,
 
     mock_file_parser.parse_file.assert_called_once_with(
         expected_zip_input_path,
-        orchestrator_instance.processed_path,
-        orchestrator_instance.schemas_config
+        orchestrator_instance.processed_path
     )
 
     # Check DatabaseLoader calls only for the successful sub-item
-    mock_db_loader.load_data.assert_called_once_with("table_ok", sub_item_success_staging_path)
+    mock_db_loader.load_parquet.assert_called_once_with("table_ok", sub_item_success_staging_path)
 
     # Check file moved to processed directory (because at least one sub-item was successful)
     expected_zip_processed_path = os.path.join(orchestrator_instance.processed_path, zip_filename)
@@ -480,9 +479,10 @@ def test_run_zip_partial_success_sub_items(orchestrator_instance, mock_os_tools,
 
     # Check manifest updated with overall success for the ZIP
     mock_manifest_manager.update_manifest.assert_called_once_with(
-        zip_filename,
+        expected_zip_input_path,
         constants.STATUS_SUCCESS, # Still overall success if at least one sub-file is loaded
-        mock.ANY
+        mock.ANY,
+        original_filename=zip_filename
     )
     mock_db_loader.close_connection.assert_called_once()
 
@@ -533,12 +533,11 @@ def test_run_zip_all_sub_items_fail(orchestrator_instance, mock_os_tools, mock_s
 
     mock_file_parser.parse_file.assert_called_once_with(
         expected_zip_input_path,
-        orchestrator_instance.processed_path,
-        orchestrator_instance.schemas_config
+        orchestrator_instance.processed_path
     )
 
     # Check DatabaseLoader is NOT called
-    mock_db_loader.load_data.assert_not_called()
+    mock_db_loader.load_parquet.assert_not_called()
 
     # Check file moved to quarantine directory
     expected_zip_quarantine_path = os.path.join(orchestrator_instance.quarantine_path, zip_filename)
@@ -546,8 +545,9 @@ def test_run_zip_all_sub_items_fail(orchestrator_instance, mock_os_tools, mock_s
 
     # Check manifest updated with overall error for the ZIP
     mock_manifest_manager.update_manifest.assert_called_once_with(
-        zip_filename,
+        expected_zip_input_path,
         constants.STATUS_ERROR, # Overall status should be error
-        mock.ANY # Message can be flexible
+        mock.ANY,
+        original_filename=zip_filename
     )
     mock_db_loader.close_connection.assert_called_once()

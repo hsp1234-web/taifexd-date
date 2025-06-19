@@ -48,7 +48,7 @@ def test_pipeline_full_run(tmp_path):
         "daily_no_keywords_fail_required": {
             "source_fixture": "csvs/no_matching_schema_keywords.csv", "input_filename": "daily_no_keywords.csv",
             "outcome": pipeline_constants.STATUS_ERROR,
-            "reason_contains": "內容與 schema 'default_daily' 的必要欄位不符", "in_quarantine": True
+            "reason_contains": "欄位重命名後，檔案 'daily_no_keywords.csv' 內容與 schema 'default_daily' 的目標欄位不符", "in_quarantine": True
         },
         "zip_with_normal_daily": {
             "source_fixture": "zips/zip_normal_single_utf8.zip", "input_filename": "zip_with_normal_daily.zip",
@@ -84,6 +84,16 @@ def test_pipeline_full_run(tmp_path):
             "outcome": pipeline_constants.STATUS_SUCCESS,
             "table": "fact_daily_ohlc", # Should be identified as daily based on content
             "rows": 2, "in_processed": True
+        },
+        "normal_daily_copy": {
+            "source_fixture": "csvs/normal_utf8_copy.csv", "input_filename": "normal_daily_copy.csv",
+            "outcome": pipeline_constants.STATUS_SUCCESS, "table": "fact_daily_ohlc", "rows": 2, "in_processed": True
+        },
+        "unidentifiable_csv": {
+            "source_fixture": "csvs/completely_unidentifiable.csv", "input_filename": "completely_unidentifiable.csv",
+            "outcome": pipeline_constants.STATUS_ERROR, # Changed from SKIPPED to ERROR
+            "reason_contains": "欄位重命名後，檔案 'completely_unidentifiable.csv' 內容與 schema 'default_daily' 的目標欄位不符", # Updated reason
+            "in_quarantine": True
         }
     }
 
@@ -128,21 +138,33 @@ def test_pipeline_full_run(tmp_path):
         database_name=db_name,
         log_name=log_name,
         target_zip_files="",
-        debug_mode=True
+        debug_mode=True,
+        schemas_file_path=str(temp_schemas_path_in_project) # Pass the path to the test's schemas.json
     )
     orchestrator.run()
 
     # --- 驗證結果 (Assertions) ---
     manifest_file_path = archive_dir / "manifest.json"
     assert manifest_file_path.exists(), "Manifest 檔案應存在"
-        # manifest_data = json.loads(manifest_file_path.read_text(encoding="utf-8"))
-        # manifest_files_info = manifest_data.get("files", {}) # Not using this detailed structure anymore
+    manifest_data = json.loads(manifest_file_path.read_text(encoding="utf-8"))
+    manifest_files_info = manifest_data.get("files", {})
+    print("DEBUG: Manifest content (keys):", manifest_files_info.keys()) # DEBUG
+    print("DEBUG: Manifest full content:", manifest_files_info) # DEBUG
 
-        # Accessing ManifestManager directly to check processed hashes for successful files
-        # This requires orchestrator to expose manifest_manager or for us to re-create one for verification.
-        # For simplicity, let's assume the orchestrator's manifest_manager is the source of truth.
-        # We will rely on file movement and DB content for now, as direct manifest content check is complex with current ManifestManager.
-        # The manifest log entries will be our proxy for manifest content verification for now.
+    # Helper to find manifest entry (simplified: assumes original filename is findable or hash matches)
+    # This is a very simplified check. A real check might need to re-calculate hash for successful files.
+    def find_manifest_entry(filename, manifest_entries):
+        # Try direct filename match first (for errors before hashing or if filename is stored)
+        if filename in manifest_entries:
+            return manifest_entries[filename]
+        # Fallback: Iterate through values if keys are hashes (very basic match, assumes filename is in value)
+        for entry_value in manifest_entries.values():
+            if isinstance(entry_value, dict) and entry_value.get("original_filename") == filename: # Hypothetical field
+                return entry_value
+            # Attempt to match based on a part of the message if filename is in reason
+            if isinstance(entry_value, dict) and filename in entry_value.get("message", ""):
+                 return entry_value
+        return None
 
     db_file_path = project_path / pipeline_constants.DB_DIR / db_name
     assert db_file_path.exists(), "DuckDB 資料庫檔案應已建立"
@@ -163,7 +185,29 @@ def test_pipeline_full_run(tmp_path):
             elif expectation.get("in_quarantine"):
                 assert not (input_dir / input_filename).exists(), f"檔案 {input_filename} ({expectation.get('source_fixture')}) 應已移出 Input"
                 assert (quarantine_dir / input_filename).exists(), f"檔案 {input_filename} ({expectation.get('source_fixture')}) 應已移至 quarantine"
-            # Manifest content assertions are simplified / relying on logs for now.
+
+            # 2. 驗證 Manifest 內容 (針對特定檔案)
+            # Note: ManifestManager uses file hashes as keys for successfully processed files.
+            # For files that errored out or were skipped before hashing, it might use the filename.
+            # This makes direct lookup by filename tricky for successful files.
+            # The current find_manifest_entry is a simplification.
+            manifest_entry = find_manifest_entry(input_filename, manifest_files_info)
+
+            # For critical checks like the unidentifiable file, we ensure the manifest entry is found and reason matches.
+            if expectation_key in ["unidentifiable_csv", "daily_no_keywords_fail_required", "weekly_mismatched_fail_required", "empty_csv_fail_required"]:
+                assert manifest_entry is not None, f"Manifest entry for {input_filename} ({expectation_key}) not found."
+                assert manifest_entry.get("status") == expectation["outcome"], \
+                    f"Manifest status for {input_filename} mismatch. Expected {expectation['outcome']}, got {manifest_entry.get('status')}"
+                if "reason_contains" in expectation:
+                    assert expectation["reason_contains"] in manifest_entry.get("message", ""), \
+                        f"Manifest message for {input_filename} did not contain '{expectation['reason_contains']}'. Got: '{manifest_entry.get('message', '')}'"
+            elif expectation.get("outcome") == pipeline_constants.STATUS_SUCCESS:
+                # For successful files, it's harder to deterministically get the manifest entry by filename
+                # because the key is a hash. We'll rely on file movement and DB content primarily.
+                # However, we can check if *any* successful entry corresponds to this file if more detailed check is needed later.
+                # For now, we assume that if it's in processed_dir and data is in DB, manifest is likely correct.
+                pass
+
 
         # --- Verify Database Content (Aggregated) ---
         expected_rows_per_table = {}
