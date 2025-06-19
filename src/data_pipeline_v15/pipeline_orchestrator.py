@@ -7,6 +7,7 @@ import shutil
 # import sys
 # import threading
 # import time
+import importlib.metadata
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
@@ -56,6 +57,11 @@ class PipelineOrchestrator:
         self.cleanup_workspace_on_finish = cleanup_workspace_on_finish
         self.is_debug_mode = debug_mode # Store debug_mode
 
+        try:
+            self.package_version = importlib.metadata.version('data-pipeline-v15')
+        except importlib.metadata.PackageNotFoundError:
+            self.package_version = "N/A (Package not found)"
+
         # Resolve paths first as logger path depends on it
         self.paths = self._resolve_paths()
 
@@ -65,7 +71,8 @@ class PipelineOrchestrator:
 
         # Dynamically set log level based on debug_mode
         log_level = 'DEBUG' if self.is_debug_mode else 'INFO'
-        self.logger = Logger(log_file_path=self.log_file_path, level=log_level)
+        self.logger = Logger(name=self.project_folder_name, log_file_path=self.log_file_path, level=log_level)
+        self.logger.log(f"Package version: {self.package_version}", level="debug") # Log package version
         self.logger.log(
             f"PipelineOrchestrator (數據整合平台 v15) initialized. Logging to: {self.log_file_path} with level: {log_level}",
             level="info",
@@ -508,6 +515,8 @@ class PipelineOrchestrator:
             f"{self.project_folder_name} (數據整合平台 v15) 執行開始...",
             level="step",
         )
+        if self.is_debug_mode:
+            self.logger.log(f"Version: {self.package_version}", level="info")
         if self.is_debug_mode and self.hw_monitor:
             self.hw_monitor.start()
         db_conn: Optional["DuckDBPyConnection"] = None
