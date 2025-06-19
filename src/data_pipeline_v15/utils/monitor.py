@@ -106,3 +106,33 @@ class HardwareMonitor:
             self._thread = None
         else:
             self.logger.log("硬體監控尚未啟動或已停止。", "info")
+
+def get_hardware_usage(context_message: str = "") -> str:
+    """
+    Retrieves current hardware usage (CPU, Memory, Disk) as a formatted string.
+
+    Args:
+        context_message (str, optional): A message to prepend to the usage string. Defaults to "".
+
+    Returns:
+        str: A formatted string detailing current hardware usage.
+    """
+    try:
+        cpu = psutil.cpu_percent(interval=0.1) # Short interval for a quick reading
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+
+        usage_str = (
+            f"CPU: {cpu:5.1f}% | "
+            f"Memory: {mem.percent:5.1f}% ({mem.used/1024**3:.2f}/{mem.total/1024**3:.2f} GB) | "
+            f"Disk: {disk.percent:5.1f}%"
+        )
+        if context_message:
+            return f"{context_message} - {usage_str}"
+        return usage_str
+    except Exception as e:
+        # In case of any error fetching psutil info, return a placeholder or error message
+        error_msg = f"Error fetching hardware usage: {e}"
+        if context_message:
+            return f"{context_message} - {error_msg}"
+        return error_msg

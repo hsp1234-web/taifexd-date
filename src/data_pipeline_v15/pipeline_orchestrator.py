@@ -66,6 +66,9 @@ class PipelineOrchestrator:
         self.db_path = os.path.join(self.project_path, DB_DIR)
         self.log_path = os.path.join(self.project_path, LOG_DIR)
 
+        # Ensure the database directory exists before DatabaseLoader tries to connect
+        os.makedirs(self.db_path, exist_ok=True)
+
         self.database_file = os.path.join(self.db_path, database_name)
 
         # --- 參數設定 ---
@@ -74,7 +77,8 @@ class PipelineOrchestrator:
         self.schemas_config = {} # Added as per requirement
 
         # --- 模組初始化 ---
-        self.manifest_manager = ManifestManager(self.archive_path)
+        manifest_file_path = os.path.join(self.project_path, "manifest.json") # Define manifest file path
+        self.manifest_manager = ManifestManager(manifest_path=manifest_file_path, logger=self.logger)
         self.file_parser = FileParser(self.manifest_manager, self.logger) # FileParser now takes manifest_manager and logger
         self.db_loader = DatabaseLoader(self.database_file, self.logger)
 
@@ -154,8 +158,22 @@ class PipelineOrchestrator:
 
                 self.logger.info(f"--- 開始處理檔案: {filename} ---")
 
-                if self.manifest_manager.is_file_processed(filename):
-                    self.logger.warning(f"檔案 '{filename}' 已被處理過且記錄在案，將跳過。")
+                # Get file hash to check against the manifest
+                file_hash = ManifestManager.get_file_hash(file_path)
+                if not file_hash:
+                    self.logger.error(f"無法計算檔案雜湊值: {file_path}。可能檔案不存在或無法讀取。將跳過此檔案。")
+                    # Optionally, move to quarantine and update manifest with error for filename
+                    # For now, just logging and skipping.
+                    self.manifest_manager.update_manifest(filename, STATUS_ERROR, f"無法計算檔案雜湊值 (路徑: {file_path})")
+                    try:
+                        shutil.move(file_path, os.path.join(self.quarantine_path, filename))
+                        self.logger.warning(f"檔案 '{filename}' 因無法取得雜湊值已移動至隔離區。")
+                    except Exception as move_e:
+                        self.logger.error(f"移動檔案 '{filename}' 至隔離區失敗 (因無法取得雜湊值): {move_e}")
+                    continue
+
+                if self.manifest_manager.has_been_processed(file_hash):
+                    self.logger.warning(f"檔案 '{filename}' (雜湊: {file_hash}) 已被處理過且記錄在案，將跳過。")
                     continue
 
                 # Call the refactored file_parser's parse_file method
@@ -272,6 +290,12 @@ class PipelineOrchestrator:
                         self.logger.error(f"處理失敗後，移動檔案 '{filename}' 至 {self.quarantine_path} 失敗: {move_e}")
                         # The manifest will still record the original processing error.
 
+                # For update_manifest, it should ideally use the file_hash if successful,
+                # or filename if hashing failed but we still want to record the attempt.
+                # The current ManifestManager.update_manifest tries to re-hash filename.
+                # This needs to be reconciled. For now, we pass filename.
+                # If overall_status_for_manifest is success, update_manifest will attempt to get hash.
+                # If it was an error before hashing (like in the block above), filename is fine.
                 self.manifest_manager.update_manifest(filename, overall_status_for_manifest, overall_message_for_manifest)
                 self.logger.info(f"--- 檔案處理完畢: {filename} (最終狀態記錄: {overall_status_for_manifest}) ---")
 
