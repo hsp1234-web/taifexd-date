@@ -1,39 +1,35 @@
 # -*- coding: utf-8 -*-
-"""專案共享常數模組。
 
-此模組定義了在整個 data_pipeline_v15 專案中可能重複使用的字串常數，
-例如路徑名稱、字典鍵名、狀態字串等，以避免魔法字串並提高可維護性。
+"""
+核心常數模組
+
+集中管理整個數據管線中使用的所有固定設定值，
+例如資料夾名稱、特定檔案名稱等，以提高可維護性。
 """
 
-# --- 路徑相關常數 ---
-DIR_NAME_INPUT = "01_input_files"
-DIR_NAME_STAGING = "02_staging_parquet"
-DIR_NAME_DATABASE = "03_database_output"
-DIR_NAME_MANIFESTS = "04_manifests"
-DIR_NAME_FAILED = "05_failed_files"
-DIR_NAME_LOGS = "99_logs"
+# --- 核心資料夾結構 ---
+# 這些變數定義了管線在專案資料夾中建立的標準目錄結構。
 
-# --- file_parser.py 返回字典鍵名 ---
-KEY_STATUS = "status"
-KEY_FILE = "file"
-KEY_REASON = "reason"
-KEY_TABLE = "table"
-KEY_COUNT = "count"
-KEY_PATH = "path"
-KEY_RESULTS = "results"  # 用於 group_result
+INPUT_DIR = "00_input"
+"""存放待處理原始數據 (例如 ZIP 檔案) 的資料夾。"""
 
-# --- file_parser.py 狀態值 ---
-STATUS_SUCCESS = "success"
-STATUS_ERROR = "error"
-STATUS_SKIPPED = "skipped"
-STATUS_GROUP_RESULT = "group_result"
+PROCESSED_DIR = "01_processed"
+"""存放已成功處理並載入資料庫的原始檔案的備份資料夾。"""
 
-# --- 執行模式與衝突策略 ---
-RUN_MODE_NORMAL = "NORMAL"
-RUN_MODE_BACKFILL = "BACKFILL"
-CONFLICT_STRATEGY_REPLACE = "REPLACE"
-CONFLICT_STRATEGY_IGNORE = "IGNORE"
+ARCHIVE_DIR = "02_archive"
+"""存放 manifest.json 檔案的地方，用於追蹤已處理的檔案紀錄。"""
 
-# --- 其他通用字串 ---
-# 可根據掃描結果在此處添加更多，例如 ".csv", ".zip", "utf-8" 等，如果它們在多處被硬式編碼。
-# 目前僅包含計劃中明確列出的。
+QUARANTINE_DIR = "03_quarantine"
+"""存放處理失敗、格式錯誤或無法解析的檔案的隔離區。"""
+
+DB_DIR = "98_database"
+"""存放最終輸出的 DuckDB 資料庫檔案的資料夾。"""
+
+LOG_DIR = "99_logs"
+"""存放所有執行日誌檔案的資料夾。"""
+
+
+# --- 檔案處理相關 ---
+
+MANIFEST_FILE = "manifest.json"
+"""用來記錄每個檔案處理狀態的 JSON 檔案名稱。"""
