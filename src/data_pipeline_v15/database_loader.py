@@ -36,65 +36,68 @@ class DatabaseLoader:
         self.logger = logger
         self.connection = None
         self.allowed_table_names = set()
-        self._load_allowed_table_names()
+        self.table_primary_keys = {} # New: Store primary key info
+        self._load_schema_configurations() # Renamed and enhanced method
         self._connect()
 
-    def _load_allowed_table_names(self):
+    def _load_schema_configurations(self):
         """
-        Loads allowed table names from the schemas.json configuration file.
+        Loads allowed table names and their primary key definitions from the schemas.json configuration file.
         """
-        # Path to schemas.json, assuming it's relative to the project root or a known config path
-        # Adjust the path as necessary based on project structure.
-        # For this example, assuming it's in a 'config' directory sibling to 'src'
-        # and the script runs from a context where this relative path is valid.
-        # A more robust solution might involve passing the config path or using absolute paths.
-        schemas_file_path = "config/schemas.json"
+        schemas_file_path = "config/schemas.json" # Consider making this configurable if needed
         try:
-            self.logger.info(f"Loading allowed table names from '{schemas_file_path}'...")
+            self.logger.info(f"載入資料表名稱和主鍵設定，來源: '{schemas_file_path}'...")
             with open(schemas_file_path, "r", encoding="utf-8") as f:
                 schemas_data = json.load(f)
 
             for schema_key, schema_config in schemas_data.items():
-                if isinstance(schema_config, dict):
-                    table_name = schema_config.get("db_table_name")
-                    if table_name:
-                        self.allowed_table_names.add(table_name)
-                    else:
-                        self.logger.warning(
-                            f"Schema '{schema_key}' in '{schemas_file_path}' is missing 'db_table_name'."
-                        )
+                if not isinstance(schema_config, dict):
+                    self.logger.warning(f"Schema '{schema_key}' 在 '{schemas_file_path}' 中的項目不是有效的字典。")
+                    continue
+
+                table_name = schema_config.get("db_table_name")
+                if not table_name:
+                    self.logger.warning(f"Schema '{schema_key}' 在 '{schemas_file_path}' 中缺少 'db_table_name'。")
+                    continue
+
+                self.allowed_table_names.add(table_name)
+
+                primary_key_columns = schema_config.get("primary_key")
+                if primary_key_columns and isinstance(primary_key_columns, list) and len(primary_key_columns) > 0:
+                    self.table_primary_keys[table_name] = primary_key_columns
+                    self.logger.info(f"資料表 '{table_name}' 找到主鍵定義: {primary_key_columns}")
                 else:
-                    self.logger.warning(
-                        f"Schema entry for '{schema_key}' in '{schemas_file_path}' is not a valid dictionary."
-                    )
+                    self.logger.info(f"資料表 '{table_name}' 未找到有效的 'primary_key' 定義。")
 
             if self.allowed_table_names:
                 self.logger.info(
-                    f"Successfully loaded {len(self.allowed_table_names)} allowed table names: {self.allowed_table_names}"
+                    f"成功載入 {len(self.allowed_table_names)} 個允許的資料表名稱: {self.allowed_table_names}"
                 )
             else:
                 self.logger.warning(
-                    f"No allowed table names were loaded from '{schemas_file_path}'. "
-                    "Ensure the file exists, is valid JSON, and contains 'db_table_name' entries."
+                    f"未從 '{schemas_file_path}' 載入任何允許的資料表名稱。"
+                    "請確保檔案存在、格式正確，並包含有效的 'db_table_name' 項目。"
                 )
 
         except FileNotFoundError:
             self.logger.error(
-                f"Schemas file '{schemas_file_path}' not found. No table names will be allowed."
+                f"Schemas 檔案 '{schemas_file_path}' 未找到。將不允許任何資料表名稱，且無法定義主鍵。"
             )
             self.allowed_table_names = set()
+            self.table_primary_keys = {}
         except json.JSONDecodeError as e:
             self.logger.error(
-                f"Error decoding JSON from '{schemas_file_path}': {e}. No table names will be allowed."
+                f"解析 JSON 檔案 '{schemas_file_path}' 時發生錯誤: {e}。將不允許任何資料表名稱，且無法定義主鍵。"
             )
             self.allowed_table_names = set()
+            self.table_primary_keys = {}
         except Exception as e:
             self.logger.error(
-                f"An unexpected error occurred while loading allowed table names from '{schemas_file_path}': {e}",
+                f"從 '{schemas_file_path}' 載入資料表名稱和主鍵時發生未預期錯誤: {e}",
                 exc_info=True
             )
             self.allowed_table_names = set()
-
+            self.table_primary_keys = {}
 
     def _connect(self):
         """
@@ -136,37 +139,83 @@ class DatabaseLoader:
         self.logger.info(f"準備將 Parquet 檔案 '{parquet_file_path}' 載入至資料表 '{table_name}'...")
 
         try:
-            # Create table if it doesn't exist based on Parquet schema
-            # Using f-string directly with table_name and parquet_file_path is safe here
-            # as these are validated/system-generated, not direct user SQL input.
-            # DuckDB handles quoting for read_parquet path internally.
-            create_table_sql = f"""
-            CREATE TABLE IF NOT EXISTS "{table_name}" AS
-            SELECT * FROM read_parquet('{parquet_file_path}') LIMIT 0;
-            """
-            self.connection.execute(create_table_sql)
-            self.logger.info(f"資料表 '{table_name}' 結構已確認/建立。")
+            # Check if table exists, and if not, create it with potential PRIMARY KEY
+            # Check if table exists
+            check_table_exists_sql = f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'"
+            table_exists = self.connection.execute(check_table_exists_sql).fetchone()
 
-            # Insert data from Parquet file
+            if not table_exists:
+                pk_columns = self.table_primary_keys.get(table_name)
+                if pk_columns:
+                    self.logger.info(f"資料表 '{table_name}' 不存在，將使用定義的主鍵 {pk_columns} 建立。")
+                    # Describe Parquet to get column names and types
+                    cursor = self.connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{parquet_file_path}')")
+                    columns_description = cursor.fetchall()
+
+                    column_definitions = []
+                    for col_name_desc, col_type_desc, _, _, _, _ in columns_description:
+                        # Ensure column names are quoted if they contain special characters or are keywords
+                        column_definitions.append(f'"{col_name_desc}" {col_type_desc}')
+
+                    create_table_statement = f'CREATE TABLE "{table_name}" ({", ".join(column_definitions)}'
+
+                    # Ensure primary key column names are also quoted
+                    quoted_pk_columns = [f'"{col}"' for col in pk_columns]
+                    create_table_statement += f', PRIMARY KEY ({", ".join(quoted_pk_columns)})'
+                    create_table_statement += ');'
+
+                    self.connection.execute(create_table_statement)
+                    self.logger.info(f"資料表 '{table_name}' 已使用定義的欄位和主鍵建立。")
+                else:
+                    self.logger.warning(
+                        f"資料表 '{table_name}' 在 schemas.json 中沒有找到主鍵定義。"
+                        "將使用 Parquet 結構建立表格，ON CONFLICT 可能無法按預期工作或會基於所有欄位。"
+                    )
+                    # Fallback to old method if no primary key defined
+                    create_table_sql = f"""
+                    CREATE TABLE IF NOT EXISTS "{table_name}" AS
+                    SELECT * FROM read_parquet('{parquet_file_path}') LIMIT 0;
+                    """
+                    self.connection.execute(create_table_sql)
+                    self.logger.info(f"資料表 '{table_name}' 結構已基於 Parquet 檔案確認/建立 (無顯式主鍵)。")
+            else:
+                 self.logger.info(f"資料表 '{table_name}' 已存在。將嘗試插入資料。")
+
+
+            # Get current total row count in the table BEFORE insert
+            count_before_query = f'SELECT COUNT(*) FROM "{table_name}"'
+            count_before = self.connection.execute(count_before_query).fetchone()[0]
+
+            # Insert data using ON CONFLICT DO NOTHING
             insert_sql = f"""
             INSERT INTO "{table_name}"
-            SELECT * FROM read_parquet('{parquet_file_path}');
+            SELECT * FROM read_parquet('{parquet_file_path}')
+            ON CONFLICT DO NOTHING;
             """
             self.connection.execute(insert_sql)
+            self.logger.info(f"資料已使用 ON CONFLICT DO NOTHING 策略嘗試載入至資料表 '{table_name}'。")
 
-            # Get the count of rows loaded
-            # This approach re-reads the parquet file for count, alternative is to see if INSERT returns row count.
-            # For simplicity and accuracy of what's in the file:
-            count_query = f"SELECT COUNT(*) FROM read_parquet('{parquet_file_path}')"
-            loaded_count = self.connection.execute(count_query).fetchone()[0]
+            # Get current total row count in the table AFTER insert
+            count_after = self.connection.execute(count_before_query).fetchone()[0]
+            rows_actually_inserted = count_after - count_before
 
-            self.logger.info(f"✅ 成功將 {loaded_count} 筆資料從 '{parquet_file_path}' 載入至資料表 '{table_name}'。")
+            # To know how many rows were *attempted* to be inserted from the Parquet file:
+            rows_in_source_parquet_query = f"SELECT COUNT(*) FROM read_parquet('{parquet_file_path}')"
+            rows_in_source_parquet = self.connection.execute(rows_in_source_parquet_query).fetchone()[0]
+
+            self.logger.info(
+                f"✅ 資料表 '{table_name}': Parquet 源文件含 {rows_in_source_parquet} 行, 本次實際插入 {rows_actually_inserted} 行。"
+                f" 資料表 '{table_name}' 現在總共有 {count_after} 筆記錄。"
+            )
+            return {"rows_in_source": rows_in_source_parquet, "rows_inserted": rows_actually_inserted}
 
         except Exception as e:
             self.logger.error(
                 f"❌ 載入 Parquet 檔案 '{parquet_file_path}' 至資料表 '{table_name}' 時發生錯誤: {e}",
                 exc_info=True
             )
+            # Return zero counts or raise to indicate failure to caller
+            return {"rows_in_source": 0, "rows_inserted": 0} # Or based on attempted_insert_count if available before error
 
     def close_connection(self):
         """

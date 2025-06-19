@@ -57,6 +57,10 @@
                 "aliases": [
                     "空方交易金額"
                 ]
+            },
+            "source": {
+                "db_type": "VARCHAR",
+                "aliases": ["source"]
             }
         }
     },
@@ -75,6 +79,7 @@
         ],
         "db_table_name": "fact_daily_ohlc",
         "required_columns": ["trading_date", "product_id", "close", "volume"],
+        "primary_key": ["trading_date", "product_id", "expiry_month", "strike_price", "option_type"],
         "unique_key": [
             "trading_date",
             "product_id",
@@ -160,7 +165,41 @@
                 "aliases": [
                     "delta"
                 ]
+            },
+            "source": {
+                "db_type": "VARCHAR",
+                "aliases": ["source"]
             }
         }
+    },
+    "quarantine_table_schema": {
+        "db_table_name": "quarantine_data",
+        "columns_map": {
+            "trading_date": {"db_type": "VARCHAR"},
+            "product_id": {"db_type": "VARCHAR"},
+            "expiry_month": {"db_type": "VARCHAR"},
+            "strike_price": {"db_type": "VARCHAR"},
+            "option_type": {"db_type": "VARCHAR"},
+            "open": {"db_type": "VARCHAR"},
+            "high": {"db_type": "VARCHAR"},
+            "low": {"db_type": "VARCHAR"},
+            "close": {"db_type": "VARCHAR"},
+            "volume": {"db_type": "VARCHAR"},
+            "open_interest": {"db_type": "VARCHAR"},
+            "delta": {"db_type": "VARCHAR"},
+            "product_name": {"db_type": "VARCHAR"},
+            "investor_type": {"db_type": "VARCHAR"},
+            "long_pos_volume": {"db_type": "VARCHAR"},
+            "long_pos_value": {"db_type": "VARCHAR"},
+            "short_pos_volume": {"db_type": "VARCHAR"},
+            "short_pos_value": {"db_type": "VARCHAR"},
+            "source": {"db_type": "VARCHAR"},
+            "quarantine_reason": {"db_type": "VARCHAR"},
+            "source_file": {"db_type": "VARCHAR"}
+        },
+        "required_columns": ["quarantine_reason", "source_file"]
+        // Primary key for quarantine table can be considered later if needed.
+        // For example: "primary_key": ["source_file", "original_row_hash"] (if hash is generated)
+        // Or simply allow duplicates for now.
     }
 }

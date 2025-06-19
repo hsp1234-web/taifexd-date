@@ -244,6 +244,23 @@ class FileParser:
 
             df = df.reindex(columns=target_columns) # Reindex to ensure consistent column order and add missing columns as NaN
 
+            # --- Add source column ---
+            source_value = "unknown_source" # Default value
+            if matched_schema_name == "weekly_report":
+                source_value = "taifex_weekly_csv"
+            elif matched_schema_name == "default_daily":
+                source_value = "taifex_daily_csv"
+            # Add more elif blocks here for other schemas if needed
+
+            df["source"] = source_value
+            self.logger.info(f"為檔案 '{display_name}' (schema: {matched_schema_name}) 添加 source 欄位，值為: '{source_value}'")
+            # Ensure 'source' is part of target_columns if it wasn't already implicitly
+            # (it should be if defined in columns_map and used by df.reindex)
+            # If 'source' was not in schema["columns_map"].keys(), df.reindex would not have added it.
+            # However, we added "source" to columns_map in schemas.json, so target_columns includes "source".
+            # df.reindex would have created it (likely with NaNs if not previously existing).
+            # The assignment df["source"] = source_value correctly fills it.
+
             # --- Required columns check ---
             required_columns = schema.get("required_columns", [])
             print(f"DBG: Required columns for schema {matched_schema_name}: {required_columns} for {display_name}")
@@ -282,14 +299,23 @@ class FileParser:
             output_dir = os.path.join(staging_dir, matched_schema_name)
             os.makedirs(output_dir, exist_ok=True)
             output_path = os.path.join(output_dir, f"{output_hash}.parquet")
-            df.to_parquet(output_path, engine="pyarrow", index=False)
+            # df.to_parquet(output_path, engine="pyarrow", index=False) # Parquet writing will be handled by Orchestrator after validation
             db_table_name = schema.get("db_table_name", matched_schema_name) # Use db_table_name if available
+
+            # The decision is to return the DataFrame itself for validation.
+            # The orchestrator will then handle writing the valid_df to Parquet.
+            # The 'output_path' here might become irrelevant or represent a temporary path if FileParser writes one.
+            # For now, let's assume FileParser's main output for success is the DataFrame.
+            # The KEY_PATH returned for now will be None or a conceptual path, as the final path is determined after validation.
+
             return {
                 constants.KEY_STATUS: constants.STATUS_SUCCESS,
-                constants.KEY_FILE: display_name,
-                constants.KEY_TABLE: db_table_name, # Return db_table_name
+                constants.KEY_FILE: display_name, # original filename or display name (e.g. zip/file.csv)
+                constants.KEY_TABLE: db_table_name,
                 constants.KEY_COUNT: len(df),
-                constants.KEY_PATH: output_path,
+                constants.KEY_DATAFRAME: df, # Return the processed DataFrame
+                constants.KEY_MATCHED_SCHEMA_NAME: matched_schema_name, # Return the schema name used for parsing/validation rules
+                constants.KEY_PATH: None, # No final Parquet path from parser itself anymore, Orchestrator handles it
             }
         except Exception as e:
             self.logger.error(f"處理檔案 '{display_name}' 時發生未知錯誤: {e}", exc_info=True)
@@ -297,4 +323,6 @@ class FileParser:
                 constants.KEY_STATUS: constants.STATUS_ERROR,
                 constants.KEY_FILE: display_name,
                 constants.KEY_REASON: f"解析檔案時發生未知錯誤: {e}",
+                constants.KEY_DATAFRAME: None, # Ensure dataframe key exists even on error
+                constants.KEY_MATCHED_SCHEMA_NAME: matched_schema_name if 'matched_schema_name' in locals() else "unknown_schema_due_to_error"
             }

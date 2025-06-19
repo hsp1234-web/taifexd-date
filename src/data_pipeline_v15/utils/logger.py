@@ -3,27 +3,67 @@ import logging
 import sys
 from datetime import datetime
 import pytz # For timezone handling
+from pythonjsonlogger import jsonlogger # Added for JSON logging
 
-class TaipeiFormatter(logging.Formatter):
-    """
-    Custom logging formatter that uses Asia/Taipei timezone for timestamps.
-    """
-    def formatTime(self, record, datefmt=None):
-        """
-        Return the creation time of the specified LogRecord as a formatted string.
-        This method is overridden to use Asia/Taipei timezone.
-        """
-        dt = datetime.fromtimestamp(record.created, tz=pytz.timezone('Asia/Taipei'))
-        if datefmt:
-            s = dt.strftime(datefmt)
-        else:
-            try:
-                # More precise ISO format with milliseconds
-                s = dt.isoformat(timespec='milliseconds')
-            except TypeError: # Fallback for Python versions older than 3.6
-                s = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')
-                s = s[:-3] # Approximate milliseconds by trimming microseconds
-        return s
+# Removed TaipeiFormatter as CustomJsonFormatter will handle timestamp formatting
+
+class CustomJsonFormatter(jsonlogger.JsonFormatter):
+    def add_fields(self, log_record, record, message_dict):
+        super(CustomJsonFormatter, self).add_fields(log_record, record, message_dict)
+        if not log_record.get('timestamp'):
+            # 使用 Asia/Taipei 時區
+            now = datetime.now(pytz.timezone('Asia/Taipei'))
+            log_record['timestamp'] = now.isoformat()
+
+        # 確保 levelname 存在並大寫
+        log_record['level'] = record.levelname.upper()
+
+        # 如果日誌訊息是一個字典 (例如，用於結構化報告)，則將其合併到 log_record
+        if isinstance(record.msg, dict):
+            # Merge the dictionary from record.msg into log_record
+            # This ensures that if a dict is logged, its fields are at the top level
+            # We need to be careful not to overwrite existing log_record fields (like 'message' if msg is dict AND has 'message' key)
+            # jsonlogger.JsonFormatter's default behavior might already handle merging record.msg if it's a dict
+            # into message_dict. Let's verify and simplify if it does.
+            # For now, assuming we want fields from record.msg to be top-level.
+            # Let's rename keys from record.msg if they conflict with standard log_record keys.
+            msg_dict_processed = {}
+            if isinstance(message_dict, dict): # message_dict is what JsonFormatter extracted from record.msg
+                 for key, value in message_dict.items():
+                    if key in log_record and key != "message": # Avoid overwriting standard fields, except 'message'
+                        # print(f"Warning: key '{key}' from logged dict conflicts with standard log field. Renaming to 'msg_{key}'.")
+                        # log_record[f"msg_{key}"] = value
+                        # Simpler: let message_dict (which is record.msg if it's a dict) overwrite if not careful.
+                        # JsonFormatter usually puts the dict into 'message' if it's a dict.
+                        # If record.msg is a dict, jsonlogger puts it into message_dict directly.
+                        # If record.msg is a string, message_dict will be {'message': 'string'}.
+                        pass # Relying on super() to have populated based on format string.
+                             # message_dict IS ALREADY record.msg if record.msg is a dict.
+
+            # The super call already processes record.msg into message_dict.
+            # If record.msg was a dict, message_dict is that dict.
+            # If record.msg was a string, message_dict is {'message': string_value}.
+            # We want to ensure that if record.msg was a dict, its items are top-level in log_record.
+            if isinstance(record.msg, dict):
+                 log_record.update(record.msg) # Merge the original dict from record.msg
+
+            # 'message' field should always be the result of record.getMessage() for consistency
+            # especially if record.msg was a dict, we still want a coherent string message.
+            log_record['message'] = record.getMessage()
+
+
+        # 移除預設的 levelname 和 asctime (如果它們被 jsonlogger.JsonFormatter 加入了)
+        # 因為我們已經有了 'level' 和 'timestamp'
+        if 'levelname' in log_record:
+            del log_record['levelname']
+        if 'asctime' in log_record: # Default format for jsonlogger might not include asctime unless specified
+            del log_record['asctime']
+
+        # 將 record.name (logger name) 加入
+        log_record['logger_name'] = record.name
+        log_record['module'] = record.module
+        log_record['funcName'] = record.funcName
+        log_record['lineno'] = record.lineno
 
 class Logger:
     """
@@ -52,14 +92,20 @@ class Logger:
             level (str): The logging level for the console stream handler (e.g., 'INFO', 'DEBUG').
         """
         self.logger = logging.getLogger(name)
-        self.logger.setLevel(logging.DEBUG)  # Set logger to the lowest level; handlers control effective level.
-        self.logger.propagate = False # Prevent duplicate logs in parent loggers, if any.
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
 
-        # Use a more detailed formatter
-        formatter = TaipeiFormatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s:%(lineno)d - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S.%f%z' # Example date format, or use default ISO in formatTime
-        )
+        # The format string for JsonFormatter defines which standard LogRecord attributes are included by default.
+        # We will add others and customize in CustomJsonFormatter.add_fields
+        # Common fields to include: 'message' (from record.msg), 'name', 'levelname' (becomes 'level'),
+        # 'pathname', 'filename', 'module', 'lineno', 'funcName'
+        # The format string here can be simple, as CustomJsonFormatter does most of the work.
+        # Example: '%(message)s %(name)s %(levelname)s %(module)s %(funcName)s %(lineno)d'
+        # Or even more basic if add_fields handles everything: '%(message)s'
+        # Let's use a format that lists the fields jsonlogger should try to extract from the record by default.
+        # These will then be available in log_record in add_fields.
+        log_format = '%(message)s %(name)s %(levelname)s %(module)s %(funcName)s %(lineno)d %(pathname)s %(filename)s'
+        formatter = CustomJsonFormatter(log_format)
 
         # File Handler - always logs at DEBUG level
         try:

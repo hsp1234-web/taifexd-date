@@ -1,0 +1,35 @@
+project_folder: "MyTaifexDataProject"
+database_name: "processed_data.duckdb"
+log_name: "pipeline.log"
+local_workspace: "/tmp/taifex_data_workspace"
+remote_base_path: "/content/drive/MyDrive"
+max_workers: null
+directories:
+  input: "00_input"
+  processed: "01_processed"
+  archive: "02_archive"
+  quarantine: "03_quarantine"
+  db: "98_database"
+  log: "99_logs"
+validation_rules:
+  default_daily: # Corresponds to matched_schema_name from FileParser
+    trading_date:
+      non_null: true
+    volume:
+      non_null: true
+      min_value: 0
+    close:
+      non_null: true # Assuming close price should always exist
+    product_id:
+      non_null: true
+  weekly_report:
+    trading_date:
+      non_null: true
+    long_pos_volume:
+      min_value: 0
+    short_pos_volume:
+      min_value: 0
+    product_name:
+      non_null: true
+    investor_type:
+      non_null: true
