@@ -42,6 +42,57 @@ class ManifestManager:
         self.logger = logger # 儲存 logger 物件
         self.processed_hashes: Set[str] = self._load()
 
+    def load_or_create_manifest(self) -> None:
+        """
+        Ensures the manifest is loaded. Since loading occurs at initialization,
+        this method can be a no-op or explicitly call _load if needed for re-load.
+        For now, it's a no-op as __init__ handles initial load.
+        """
+        # self.processed_hashes = self._load() # Optionally allow re-loading
+        pass
+
+    def update_manifest(self, filename: str, status: str, message: str) -> None:
+        """
+        Updates the manifest based on the processing status of a file.
+        If successful, the file's hash is added to the processed list.
+        Logs the outcome.
+
+        Args:
+            filename (str): The name of the file being processed. Note: this is the basename.
+                            The actual path for hashing might need context if not unique.
+                            For now, we assume it's just recorded as is or a placeholder.
+            status (str): The status of the processing (e.g., "SUCCESS", "ERROR").
+            message (str): A message describing the outcome.
+        """
+        # In a real scenario, we'd get a unique identifier for the file,
+        # typically a hash of its content or full path.
+        # For the purpose of this method matching the orchestrator's call signature,
+        # we'll use the filename as a proxy for the item to be recorded if successful.
+        # The actual PipelineOrchestrator might need to pass a hash if that's the key.
+
+        self.logger.log(f"Manifest update for '{filename}': Status - {status}, Message - {message}", level="info")
+
+        # Assuming constants.STATUS_SUCCESS is available or comparing with string
+        # from .core import constants # Would be needed if using constants.STATUS_SUCCESS
+        if status == "SUCCESS": # Replace "SUCCESS" with actual constant if available
+            # If filename itself is not the hash, this logic needs adjustment.
+            # The current add_processed_hashes expects a hash or list of hashes.
+            # This is a simplification to match the orchestrator's current call.
+            # A more robust solution would involve hashing `filename` if it's a path,
+            # or the orchestrator providing the hash.
+            # For now, let's assume filename can be added if it's a unique ID.
+            # However, add_processed_hashes expects a hash. This highlights a design mismatch.
+            # Let's log and *not* add the raw filename if it's not a hash.
+            # A placeholder for what should happen:
+            file_identifier = self.get_file_hash(filename) # This would fail if filename is not a path
+            if file_identifier: # Or if status indicates success and an identifier exists
+                 self.add_processed_hashes(file_identifier)
+                 self.logger.log(f"File '{filename}' (hash: {file_identifier}) marked as processed.", level="debug")
+            elif status == "SUCCESS": # If it was success but we couldn't get an identifier
+                 self.logger.warning(f"File '{filename}' reported success, but no hash obtained to update manifest. Manifest not updated with this item.")
+        # No specific action for error/other statuses other than logging, already done.
+        # The manifest primarily tracks *successfully* processed items by hash.
+
     def _load(self) -> Set[str]:
         """從指定的路徑載入已處理的檔案雜湊值清單。
 

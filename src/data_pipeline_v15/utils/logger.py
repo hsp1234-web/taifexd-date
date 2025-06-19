@@ -127,6 +127,39 @@ class Logger:
     def success(self, message, **kwargs):
         self.log(message, level="success", **kwargs)
 
+def setup_logger(log_path_dir: str, log_filename: str, debug_mode: bool):
+    """
+    Sets up and returns a logger instance configured by the Logger class.
+
+    Args:
+        log_path_dir (str): The directory where the log file will be stored.
+        log_filename (str): The name of the log file.
+        debug_mode (bool): If True, sets console logging level to DEBUG, otherwise INFO.
+
+    Returns:
+        logging.Logger: The configured logger instance.
+    """
+    import os # Ensure os is imported here if not globally available in this exact scope (it is in this file)
+
+    # Determine logging level for the console
+    level_str = "DEBUG" if debug_mode else "INFO"
+
+    # Construct the full log file path
+    # The Logger class itself doesn't create the directory, so it's assumed log_path_dir exists
+    # or will be created by the orchestrator.
+    full_log_path = os.path.join(log_path_dir, log_filename)
+
+    # Instantiate the custom Logger class
+    # The 'name' of the logger can be derived from log_filename or be a fixed name like 'data_pipeline'
+    # Using log_filename without extension might be cleaner for logger name.
+    logger_name = os.path.splitext(log_filename)[0]
+
+    custom_logger_instance = Logger(name=logger_name, log_file_path=full_log_path, level=level_str)
+
+    # The orchestrator expects to use the returned logger directly with .info(), .debug() etc.
+    # The Logger class has self.logger which is the actual logging.Logger instance.
+    return custom_logger_instance.logger
+
 
 if __name__ == '__main__':
     # Example Usage:
