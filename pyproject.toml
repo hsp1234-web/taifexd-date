@@ -7,7 +7,7 @@ authors = [
     {name = "google-labs-jules[bot]",email = "161369871+google-labs-jules[bot]@users.noreply.github.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "psutil (>=7.0.0,<8.0.0)",
     "pandas (>=2.3.0,<3.0.0)",
