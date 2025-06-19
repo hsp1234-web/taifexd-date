@@ -14,7 +14,7 @@ class Logger:
         >>> logger.log("這是一個成功操作！", level="success")
     """
 
-    def __init__(self, log_file_path):
+    def __init__(self, log_file_path, level='INFO'):
         """初始化 Logger 物件。
 
         這個方法會設定日誌的基本配置，包括日誌級別、格式、日期格式，
@@ -23,21 +23,37 @@ class Logger:
 
         :param log_file_path: 日誌檔案的完整路徑。
         :type log_file_path: str
+        :param level: 控制台輸出的日誌級別，預設為 'INFO'。
+        :type level: str, optional
         """
-        self.log_file_path = log_file_path
-        # 清除已存在的處理器
-        for handler in logging.root.handlers[:]:
-            logging.root.removeHandler(handler)
+        # 1. 獲取並清理根 Logger
+        logger = logging.getLogger()
+        logger.handlers = []  # 清空所有已存在的 handlers
+        logger.setLevel(logging.DEBUG)  # 將 logger 的基礎級別設定為 logging.DEBUG
 
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s.%(msecs)03d - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-            handlers=[
-                logging.FileHandler(self.log_file_path, mode="w", encoding="utf-8"),
-                logging.StreamHandler(sys.stdout),
-            ],
-        )
+        # 2. 配置「檔案處理器」(FileHandler)
+        file_handler = logging.FileHandler(log_file_path, mode="w", encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)  # FileHandler 的級別硬式編碼為 logging.DEBUG
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+
+        # 3. 配置「控制台處理器」(StreamHandler)
+        console_handler = logging.StreamHandler(sys.stdout)
+        # 根據傳入的 level 參數動態設定 StreamHandler 的級別
+        if level.upper() == 'DEBUG':
+            console_handler.setLevel(logging.DEBUG)
+        elif level.upper() == 'INFO':
+            console_handler.setLevel(logging.INFO)
+        else:
+            # 預設或錯誤處理，這裡預設為 INFO
+            console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(message)s')
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
+
+        # 4. 儲存 Logger 實例
+        self.logger = logger
 
     def log(self, message, level="info"):
         """記錄一條日誌訊息。
@@ -62,6 +78,12 @@ class Logger:
         symbol = symbol_map.get(level, "⚪")
 
         if level == "step":
-            logging.info(f"\n{'='*80}\n{symbol} {message}\n{'='*80}")
-        else:
-            logging.info(f"{symbol} {message}")
+            self.logger.info(f"\n{'='*80}\n{symbol} {message}\n{'='*80}")
+        elif level == "error":
+            self.logger.error(f"{symbol} {message}")
+        elif level == "warning":
+            self.logger.warning(f"{symbol} {message}")
+        elif level == "debug": # Assuming you might want a debug level in your map
+            self.logger.debug(f"{symbol} {message}")
+        else: # Default to info for 'info', 'success', 'substep' or unknown
+            self.logger.info(f"{symbol} {message}")

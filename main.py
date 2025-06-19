@@ -60,6 +60,11 @@ def parse_arguments() -> argparse.Namespace:
         default='',
         help="指定要處理的ZIP檔案列表，以逗號分隔。如果為空，則處理所有找到的ZIP檔案。",
     )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='啟用詳細的除錯日誌與硬體監控模式。'
+    )
     args = parser.parse_args()
     return args
 
@@ -82,9 +87,10 @@ def main():
             project_folder_name=args.project_folder_name,
             database_name=args.database_name,
             log_name=args.log_name,
-            zip_files=args.zip_files
+            zip_files=args.zip_files,
             # TODO: Add other necessary orchestrator params like run_mode, conflict_strategy, schemas, etc.
             # These might come from a config file or have defaults in orchestrator itself.
+            debug_mode=args.debug # Pass the debug flag
         )
         orchestrator.run()
         # Assuming log_file_path is an accessible attribute after run or initialization
