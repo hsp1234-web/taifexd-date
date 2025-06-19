@@ -33,3 +33,19 @@ LOG_DIR = "99_logs"
 
 MANIFEST_FILE = "manifest.json"
 """用來記錄每個檔案處理狀態的 JSON 檔案名稱。"""
+
+# Keys for result dictionaries
+KEY_STATUS = "status"
+KEY_MESSAGE = "message" # Already present from previous subtask, kept for completeness
+KEY_FILE = "file"
+KEY_REASON = "reason"
+KEY_TABLE = "table"
+KEY_COUNT = "count"
+KEY_PATH = "path"
+KEY_RESULTS = "results"
+
+# Status values
+STATUS_SUCCESS = "success"
+STATUS_ERROR = "error"
+STATUS_SKIPPED = "skipped"
+STATUS_GROUP_RESULT = "group_result"
