@@ -12,7 +12,19 @@ from .core.constants import (
     LOG_DIR,
     PROCESSED_DIR,
     QUARANTINE_DIR,
+    KEY_STATUS,
+    KEY_PATH,
+    KEY_TABLE,
+    KEY_REASON,
+    KEY_RESULTS,
+    KEY_FILE,
+    KEY_COUNT,
+    STATUS_SUCCESS,
+    STATUS_ERROR,
+    STATUS_GROUP_RESULT,
+    STATUS_SKIPPED,
 )
+from .core import constants  # Added to allow access to constants like constants.KEY_STATUS
 from .database_loader import DatabaseLoader
 from .file_parser import FileParser
 from .manifest_manager import ManifestManager
@@ -59,10 +71,11 @@ class PipelineOrchestrator:
         # --- 參數設定 ---
         self.debug_mode = debug_mode
         self.logger = setup_logger(self.log_path, log_name, debug_mode)
+        self.schemas_config = {} # Added as per requirement
 
         # --- 模組初始化 ---
         self.manifest_manager = ManifestManager(self.archive_path)
-        self.file_parser = FileParser(self.manifest_manager, self.logger)
+        self.file_parser = FileParser(self.manifest_manager, self.logger) # FileParser now takes manifest_manager and logger
         self.db_loader = DatabaseLoader(self.database_file, self.logger)
 
         # --- 目標檔案處理 ---
@@ -136,35 +149,131 @@ class PipelineOrchestrator:
             for filename in files_to_process:
                 file_path = os.path.join(self.input_path, filename)
                 if not os.path.isfile(file_path):
+                    self.logger.debug(f"Skipping non-file item: {filename}")
                     continue
 
                 self.logger.info(f"--- 開始處理檔案: {filename} ---")
 
-                # 檢查是否已處理過
                 if self.manifest_manager.is_file_processed(filename):
-                    self.logger.warning(f"檔案 '{filename}' 已被處理過，將跳過。")
+                    self.logger.warning(f"檔案 '{filename}' 已被處理過且記錄在案，將跳過。")
                     continue
 
-                # 解析檔案
-                result_df, status, message = self.file_parser.parse_file(file_path)
+                # Call the refactored file_parser's parse_file method
+                parse_result = self.file_parser.parse_file(file_path, self.processed_path, self.schemas_config)
 
-                if status == "success" and not result_df.empty:
-                    self.logger.info(f"檔案 '{filename}' 解析成功，共 {len(result_df)} 筆資料。")
-                    # 載入資料庫
-                    self.db_loader.load_data(result_df)
-                    # 移動到已處理資料夾
-                    shutil.move(file_path, os.path.join(self.processed_path, filename))
-                    self.logger.info(f"檔案已移動至 -> {self.processed_path}")
+                overall_status_for_manifest = parse_result.get(constants.KEY_STATUS, constants.STATUS_ERROR)
+                overall_message_for_manifest = parse_result.get(constants.KEY_REASON, f"檔案 '{filename}' 處理時遇到未知狀況。")
+
+                # Default assumption: move to quarantine unless explicitly successful
+                move_to_processed = False
+
+                if overall_status_for_manifest == constants.STATUS_GROUP_RESULT:
+                    self.logger.info(f"檔案 '{filename}' (ZIP) 包含多個項目，正在逐一處理子項目...")
+                    all_sub_results = parse_result.get(constants.KEY_RESULTS, [])
+
+                    if not all_sub_results:
+                        # This case implies the ZIP was perhaps empty or had non-CSV contents,
+                        # but was still successfully opened and assessed as a 'group'.
+                        # The file_parser should ideally set a more specific KEY_REASON.
+                        overall_message_for_manifest = parse_result.get(constants.KEY_REASON, f"ZIP 檔案 '{filename}' 未包含可處理的 CSV 內容。")
+                        self.logger.warning(overall_message_for_manifest)
+                        # Keep move_to_processed = False (goes to quarantine) unless a sub-file succeeds.
+
+                    successful_sub_files = 0
+                    failed_sub_files = 0
+                    at_least_one_sub_file_db_loaded = False
+
+                    for item_result in all_sub_results:
+                        item_status = item_result.get(constants.KEY_STATUS)
+                        item_msg = item_result.get(constants.KEY_REASON, "子項目處理訊息遺失")
+                        item_path = item_result.get(constants.KEY_PATH)
+                        item_table = item_result.get(constants.KEY_TABLE)
+                        item_display_name = item_result.get(constants.KEY_FILE, "未知子項目")
+                        item_data_count = item_result.get(constants.KEY_COUNT, 0)
+
+                        if item_status == constants.STATUS_SUCCESS and item_path and item_table:
+                            self.logger.info(f"子項目 '{item_display_name}' (來自 {filename}) 解析成功，共 {item_data_count} 筆資料。表格: {item_table}, 路徑: {item_path}。")
+                            try:
+                                # Assuming DatabaseLoader.load_data(table_name, parquet_file_path)
+                                self.db_loader.load_data(item_table, item_path)
+                                self.logger.info(f"子項目 '{item_display_name}' 的資料已成功載入資料庫。")
+                                successful_sub_files += 1
+                                at_least_one_sub_file_db_loaded = True # Key for moving ZIP to processed
+                            except Exception as db_e:
+                                self.logger.error(f"子項目 '{item_display_name}' 資料載入資料庫失敗: {db_e}")
+                                failed_sub_files += 1
+                        elif item_status == constants.STATUS_SKIPPED:
+                             self.logger.warning(f"子項目 '{item_display_name}' (來自 {filename}) 被跳過: {item_msg}")
+                             # Not necessarily a failure for the whole ZIP
+                        else: # Error or other non-success status for the sub-item
+                            self.logger.error(f"子項目 '{item_display_name}' (來自 {filename}) 解析失敗: {item_msg}")
+                            failed_sub_files += 1
+
+                    if at_least_one_sub_file_db_loaded: # If any sub-file was successfully loaded to DB
+                        move_to_processed = True
+                        overall_status_for_manifest = constants.STATUS_SUCCESS # Mark overall ZIP as success if at least one part succeeded
+                        overall_message_for_manifest = f"ZIP '{filename}' 處理完成。成功載入資料庫: {successful_sub_files} 個子項目, 處理失敗/跳過: {failed_sub_files} 個子項目。"
+                    else:
+                        # No sub-file made it to the DB
+                        move_to_processed = False
+                        overall_status_for_manifest = constants.STATUS_ERROR # Mark overall ZIP as error
+                        if failed_sub_files > 0 :
+                             overall_message_for_manifest = f"ZIP '{filename}' 所有可處理的子項目均處理失敗或資料庫載入失敗 ({failed_sub_files} 個失敗)。"
+                        elif all_sub_results and successful_sub_files == 0 and failed_sub_files == 0 : # All skipped or no actual data
+                             overall_message_for_manifest = f"ZIP '{filename}' 未包含成功載入資料庫的資料 (可能所有子項目被跳過或無資料)。"
+                        # If all_sub_results was empty from the start, overall_message_for_manifest retains its earlier value.
+
+
+                elif overall_status_for_manifest == constants.STATUS_SUCCESS:
+                    # This branch is for single CSV files (or other direct success statuses from file_parser)
+                    parquet_path = parse_result.get(constants.KEY_PATH)
+                    table_name = parse_result.get(constants.KEY_TABLE)
+                    file_data_count = parse_result.get(constants.KEY_COUNT, 0)
+
+                    if parquet_path and table_name:
+                        self.logger.info(f"檔案 '{filename}' 解析成功，共 {file_data_count} 筆資料。表格: {table_name}, 路徑: {parquet_path}")
+                        try:
+                            # Assuming DatabaseLoader.load_data(table_name, parquet_file_path)
+                            self.db_loader.load_data(table_name, parquet_path)
+                            self.logger.info(f"檔案 '{filename}' 的資料已成功載入資料庫。")
+                            move_to_processed = True
+                            overall_message_for_manifest = f"檔案 '{filename}' 成功處理並載入 {file_data_count} 筆記錄到表格 '{table_name}'。"
+                        except Exception as db_e:
+                            self.logger.error(f"檔案 '{filename}' 解析成功但資料庫載入失敗: {db_e}")
+                            overall_status_for_manifest = constants.STATUS_ERROR # Update status due to DB error
+                            overall_message_for_manifest = f"檔案 '{filename}' 解析成功但資料庫載入失敗: {db_e}"
+                            move_to_processed = False
+                    else:
+                        # STATUS_SUCCESS but no path or table - should ideally not happen.
+                        self.logger.error(f"檔案 '{filename}' 狀態為成功但缺少 Parquet 路徑或表格名稱。")
+                        overall_status_for_manifest = constants.STATUS_ERROR # Correct status to error
+                        overall_message_for_manifest = parse_result.get(constants.KEY_REASON, f"檔案 '{filename}' 狀態為成功但缺少必要資訊 (路徑/表格)。")
+                        move_to_processed = False
+
+                # For all other statuses (STATUS_ERROR, STATUS_SKIPPED at the top level for the file itself)
+                # move_to_processed remains False, overall_status_for_manifest and overall_message_for_manifest
+                # should already be set from parse_result.get(...)
+                # Example: if file was skipped by file_parser, its status would be STATUS_SKIPPED.
+                # If file_parser had an error (e.g. bad zip file), status would be STATUS_ERROR.
+
+                if move_to_processed:
+                    try:
+                        shutil.move(file_path, os.path.join(self.processed_path, filename))
+                        self.logger.info(f"檔案 '{filename}' 已處理並移動至 -> {self.processed_path}")
+                    except Exception as move_e:
+                        self.logger.error(f"成功處理後，移動檔案 '{filename}' 至 {self.processed_path} 失敗: {move_e}")
+                        overall_status_for_manifest = constants.STATUS_ERROR # Update status due to move error
+                        overall_message_for_manifest += f" 但移至已處理資料夾失敗: {move_e}"
                 else:
-                    self.logger.error(f"檔案 '{filename}' 處理失敗或為空: {message}")
-                    # 移動到隔離區
-                    shutil.move(file_path, os.path.join(self.quarantine_path, filename))
-                    self.logger.warning(f"檔案已移動至隔離區 -> {self.quarantine_path}")
+                    try:
+                        shutil.move(file_path, os.path.join(self.quarantine_path, filename))
+                        self.logger.warning(f"檔案 '{filename}' 已移動至隔離區 -> {self.quarantine_path} (原因: {overall_message_for_manifest})")
+                    except Exception as move_e:
+                        self.logger.error(f"處理失敗後，移動檔案 '{filename}' 至 {self.quarantine_path} 失敗: {move_e}")
+                        # The manifest will still record the original processing error.
 
-                # 更新 Manifest
-                self.manifest_manager.update_manifest(filename, status, message)
-                self.logger.info(f"--- 檔案處理完畢: {filename} ---")
-
+                self.manifest_manager.update_manifest(filename, overall_status_for_manifest, overall_message_for_manifest)
+                self.logger.info(f"--- 檔案處理完畢: {filename} (最終狀態記錄: {overall_status_for_manifest}) ---")
 
         except Exception as e:
             self.logger.critical(f"管線執行過程中發生無法恢復的錯誤: {e}", exc_info=True)
