@@ -70,7 +70,7 @@ class ManifestManager:
         # we'll use the filename as a proxy for the item to be recorded if successful.
         # The actual PipelineOrchestrator might need to pass a hash if that's the key.
 
-        self.logger.log(f"Manifest update for '{filename}': Status - {status}, Message - {message}", level="info")
+        self.logger.log("info", f"Manifest update for '{filename}': Status - {status}, Message - {message}")
 
         # Assuming constants.STATUS_SUCCESS is available or comparing with string
         # from .core import constants # Would be needed if using constants.STATUS_SUCCESS
@@ -87,9 +87,9 @@ class ManifestManager:
             file_identifier = self.get_file_hash(filename) # This would fail if filename is not a path
             if file_identifier: # Or if status indicates success and an identifier exists
                  self.add_processed_hashes(file_identifier)
-                 self.logger.log(f"File '{filename}' (hash: {file_identifier}) marked as processed.", level="debug")
+                 self.logger.log("debug", f"File '{filename}' (hash: {file_identifier}) marked as processed.")
             elif status == "SUCCESS": # If it was success but we couldn't get an identifier
-                 self.logger.warning(f"File '{filename}' reported success, but no hash obtained to update manifest. Manifest not updated with this item.")
+                 self.logger.log("warning", f"File '{filename}' reported success, but no hash obtained to update manifest. Manifest not updated with this item.")
         # No specific action for error/other statuses other than logging, already done.
         # The manifest primarily tracks *successfully* processed items by hash.
 
