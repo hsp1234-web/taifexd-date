@@ -157,13 +157,6 @@ class PipelineOrchestrator:
                     self.logger.debug(f"Skipping non-file item: {filename}")
                     continue
 
-                # NEW: Check for supported file extensions
-                if not filename.lower().endswith(('.zip', '.csv')):
-                    self.logger.warning(f"檔案 '{filename}' 的副檔名不受支援，將跳過處理。僅支援 .zip 和 .csv 檔案。")
-                    # Optionally, update manifest for skipped unsupported files
-                    # self.manifest_manager.update_manifest(filename, STATUS_SKIPPED, "Unsupported file extension")
-                    continue
-
                 self.logger.info(f"--- 開始處理檔案: {filename} ---")
 
                 # Get file hash to check against the manifest
