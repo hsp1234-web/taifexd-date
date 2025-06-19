@@ -49,6 +49,7 @@ def test_pipeline_full_run(tmp_path):
         "log_name": test_log_name,
         "local_workspace": str(local_workspace_root_path),
         "remote_base_path": str(remote_drive_base_path), # Should match orchestrator's base_path if GDrive is simulated
+        "max_workers": 4, # Ensure parallelism is triggered but not excessive for tests
         "directories": dir_config
     }
     temp_config_file = tmp_path / "test_config.yaml"

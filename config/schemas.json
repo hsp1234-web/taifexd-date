@@ -75,6 +75,7 @@
         ],
         "db_table_name": "fact_daily_ohlc",
         "required_columns": ["trading_date", "product_id", "close", "volume"],
+        "primary_key": ["trading_date", "product_id", "expiry_month", "strike_price", "option_type"],
         "unique_key": [
             "trading_date",
             "product_id",

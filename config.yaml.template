@@ -13,6 +13,11 @@ local_workspace: "/tmp/taifex_data_workspace"
 # Remote base path (e.g., Google Drive)
 remote_base_path: "/content/drive/MyDrive"
 
+# max_workers: 並行處理檔案時的最大工作程序數。
+# 若為 null 或未設定，系統將自動使用 CPU 核心數的一半 (最少4，最多32)。
+# 您可以設定一個具體數值以覆蓋自動偵測邏輯。
+max_workers: 8
+
 # Directory settings (relative to project_folder)
 directories:
   input: "00_input"       # Directory for input files

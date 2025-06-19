@@ -278,3 +278,116 @@ def test_close_connection_no_connection(mock_logger):
         for call_args in mock_logger.info.call_args_list:
             assert "正在關閉 DuckDB 資料庫連線..." not in call_args[0][0]
             assert "資料庫連線已成功關閉。" not in call_args[0][0]
+
+
+# --- Tests for load_parquet with Idempotency ---
+
+@pytest.fixture
+def sample_parquet_file_for_idempotency(tmp_path):
+    """Creates a sample Parquet file for idempotency testing."""
+    data = {
+        "trading_date": pd.to_datetime(["2023-01-01", "2023-01-01", "2023-01-02"]),
+        "product_id": ["TXF", "TXF", "MXF"],
+        "expiry_month": ["202301", "202302", "202301"],
+        "strike_price": [14000.0, 14000.0, 7000.0],
+        "option_type": ["C", "P", "C"],
+        "open": [100.0, 50.0, 200.0],
+        "high": [110.0, 55.0, 210.0],
+        "low": [90.0, 45.0, 190.0],
+        "close": [105.0, 52.0, 205.0],
+        "volume": [1000, 500, 800],
+        "open_interest": [5000, 2000, 3000],
+        "delta": [0.5, -0.4, 0.6]
+    }
+    df = pd.DataFrame(data)
+    parquet_path = tmp_path / "sample_fact_daily_ohlc.parquet"
+    df.to_parquet(parquet_path)
+    return parquet_path
+
+# Patch _connect for all load_parquet tests to avoid actual DB operations for most,
+# but for idempotency test, we need a real in-memory DB.
+def test_load_parquet_idempotent(tmp_path, mock_logger, sample_parquet_file_for_idempotency):
+    """
+    Tests the idempotent behavior of load_parquet when primary keys are defined.
+    """
+    db_file = tmp_path / "test_idempotent.db"
+    table_name = "fact_daily_ohlc" # Matches the sample parquet data's intended table
+
+    # 1. Setup DatabaseLoader with mocked schema config to include primary key
+    # We are testing the DatabaseLoader's interaction with a real DB here.
+    # So, we don't mock duckdb.connect itself, but we control the schema interpretation.
+
+    # loader = DatabaseLoader(database_file=str(db_file), logger=mock_logger)
+    # We need to ensure _load_schema_configurations is called *after* we can mock it,
+    # or that it uses a schemas file path we can control.
+    # The easiest is to use @patch on the class or its method.
+
+    with patch.object(DatabaseLoader, '_load_schema_configurations', autospec=True) as mock_load_schemas:
+
+        loader = DatabaseLoader(database_file=str(db_file), logger=mock_logger)
+
+        # Configure the mock behavior inside the context
+        loader.allowed_table_names = {table_name} # Manually set after mock
+        loader.table_primary_keys = {
+            table_name: ["trading_date", "product_id", "expiry_month", "strike_price", "option_type"]
+        }
+        mock_load_schemas.assert_called_once() # Ensure it was called during init
+
+        # Ensure connection is established (it's called in __init__)
+        assert loader.connection is not None, "Database connection should be established."
+
+        # 2. First load
+        loader.load_parquet(table_name, str(sample_parquet_file_for_idempotency))
+
+        count_after_first_load = loader.connection.execute(f"SELECT COUNT(*) FROM \"{table_name}\"").fetchone()[0]
+        assert count_after_first_load == 3, "Row count after first load should be 3."
+        mock_logger.info.assert_any_call(f"資料表 '{table_name}' 已使用定義的欄位和主鍵建立。")
+        mock_logger.info.assert_any_call(f"資料已使用 ON CONFLICT DO NOTHING 策略嘗試載入至資料表 '{table_name}'。")
+
+
+        # 3. Second load (same data)
+        loader.load_parquet(table_name, str(sample_parquet_file_for_idempotency))
+
+        count_after_second_load = loader.connection.execute(f"SELECT COUNT(*) FROM \"{table_name}\"").fetchone()[0]
+        assert count_after_second_load == 3, "Row count after second load should remain 3 due to idempotency."
+
+        # Check that no critical errors were logged during the second attempt.
+        # Errors like "file not found" or "table not allowed" are fine if they are part of other tests,
+        # but for this specific load_parquet call, after the first successful one,
+        # a second identical call should not produce new operational errors.
+        # We can check the log calls specific to the second load if needed, but for now, a general error check.
+        # Filter out "Table already exists" type warnings if they occur and are expected.
+        # For now, let's check that logger.error was not called after the initial setup phase.
+        # Count error calls before second load
+        error_calls_before_second_load = mock_logger.error.call_count
+        loader.load_parquet(table_name, str(sample_parquet_file_for_idempotency)) # This is the third call, but second *effective* data load call for testing idempotency
+        count_after_third_load = loader.connection.execute(f"SELECT COUNT(*) FROM \"{table_name}\"").fetchone()[0]
+        assert count_after_third_load == 3, "Row count after third load should still remain 3."
+
+        # Check if any new errors were logged specifically by the third call.
+        # This is a bit tricky as load_parquet itself logs.
+        # The key is that `ON CONFLICT DO NOTHING` should not raise an error.
+        # We can check the number of error calls hasn't increased beyond what's expected.
+        # Let's assume the setup and first load might log legitimate errors if files were missing (not in this test).
+        # The critical part is that the second (and third) identical load does not itself cause an exception or error log
+        # related to data insertion.
+        # A simple check:
+        # Store error calls before the *very first* load_parquet in this test.
+        # This is tricky as __init__ itself might log.
+        # Alternative: Check specific log messages.
+
+        # Check that the "ON CONFLICT DO NOTHING" message was logged again for the subsequent calls.
+        log_calls = [call[0][0] for call in mock_logger.info.call_args_list]
+        assert log_calls.count(f"資料已使用 ON CONFLICT DO NOTHING 策略嘗試載入至資料表 '{table_name}'。") >= 3 # Init + 3 calls to load_parquet
+
+        # Verify table structure includes PRIMARY KEY (example for DuckDB)
+        table_info = loader.connection.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+        # DuckDB's PRAGMA table_info returns columns: cid, name, type, notnull, dflt_value, pk
+        # pk is 1 for a column that is part of the primary key, 0 otherwise.
+        # For composite PK, multiple columns will have pk > 0, and the value indicates their order in PK.
+        pk_columns_from_db = {row[1] for row in table_info if row[5] > 0}
+        expected_pk_columns = {"trading_date", "product_id", "expiry_month", "strike_price", "option_type"}
+        assert pk_columns_from_db == expected_pk_columns, \
+            f"Primary key columns in DB {pk_columns_from_db} do not match expected {expected_pk_columns}"
+
+        loader.close_connection()
