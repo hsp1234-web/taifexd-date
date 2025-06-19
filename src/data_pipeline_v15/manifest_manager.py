@@ -44,12 +44,19 @@ class ManifestManager:
 
     def load_or_create_manifest(self) -> None:
         """
-        Ensures the manifest is loaded. Since loading occurs at initialization,
-        this method can be a no-op or explicitly call _load if needed for re-load.
-        For now, it's a no-op as __init__ handles initial load.
+        Ensures the manifest file exists and is loaded.
+        If the manifest file does not exist, it creates an empty one.
+        Loading (or re-loading) of hashes also occurs.
         """
-        # self.processed_hashes = self._load() # Optionally allow re-loading
-        pass
+        if not os.path.exists(self.path):
+            self.logger.info(f"Manifest file '{self.path}' not found. Creating a new empty manifest.")
+            self.processed_hashes = set() # Start with an empty set of hashes
+            self._save() # Save the empty manifest, this creates the file with {"hashes": []}
+        else:
+            # File exists, load it. This is already done by __init__ if path existed then,
+            # but this makes load_or_create_manifest idempotent and usable for re-loading.
+            self.processed_hashes = self._load()
+            self.logger.info(f"Manifest file '{self.path}' loaded.")
 
     def update_manifest(self, filename: str, status: str, message: str) -> None:
         """
@@ -70,7 +77,7 @@ class ManifestManager:
         # we'll use the filename as a proxy for the item to be recorded if successful.
         # The actual PipelineOrchestrator might need to pass a hash if that's the key.
 
-        self.logger.log("info", f"Manifest update for '{filename}': Status - {status}, Message - {message}")
+        self.logger.info(f"Manifest update for '{filename}': Status - {status}, Message - {message}")
 
         # Assuming constants.STATUS_SUCCESS is available or comparing with string
         # from .core import constants # Would be needed if using constants.STATUS_SUCCESS
@@ -87,9 +94,9 @@ class ManifestManager:
             file_identifier = self.get_file_hash(filename) # This would fail if filename is not a path
             if file_identifier: # Or if status indicates success and an identifier exists
                  self.add_processed_hashes(file_identifier)
-                 self.logger.log("debug", f"File '{filename}' (hash: {file_identifier}) marked as processed.")
+                 self.logger.debug(f"File '{filename}' (hash: {file_identifier}) marked as processed.")
             elif status == "SUCCESS": # If it was success but we couldn't get an identifier
-                 self.logger.log("warning", f"File '{filename}' reported success, but no hash obtained to update manifest. Manifest not updated with this item.")
+                 self.logger.warning(f"File '{filename}' reported success, but no hash obtained to update manifest. Manifest not updated with this item.")
         # No specific action for error/other statuses other than logging, already done.
         # The manifest primarily tracks *successfully* processed items by hash.
 
@@ -116,11 +123,11 @@ class ManifestManager:
                 # 因此，確保data.get的後備值是空列表[]
                 hashes_list = data.get("hashes", [])
                 if not isinstance(hashes_list, list):
-                    self.logger.log(f"Manifest 檔案 '{self.path}' 中的 'hashes' 鍵並非一個列表，已將其視為空清單。", level="warning")
+                    self.logger.warning(f"Manifest 檔案 '{self.path}' 中的 'hashes' 鍵並非一個列表，已將其視為空清單。")
                     return set()
                 return set(hashes_list)
         except Exception as e: # 捕捉讀取或解析現有檔案時的任何錯誤
-            self.logger.log(f"載入 Manifest 檔案 '{self.path}' 時發生錯誤: {e}", level="error")
+            self.logger.error(f"載入 Manifest 檔案 '{self.path}' 時發生錯誤: {e}")
             return set() # 在發生錯誤時，保證返回空集合
 
     def _save(self) -> None:
@@ -147,7 +154,7 @@ class ManifestManager:
                     ensure_ascii=False,
                 )
         except Exception as e:
-            self.logger.log(f"儲存 Manifest 檔案 '{self.path}' 時發生錯誤: {e}", level="error")
+            self.logger.error(f"儲存 Manifest 檔案 '{self.path}' 時發生錯誤: {e}")
             # 錯誤已被記錄。依照作業描述，方法正常結束。
 
     @staticmethod

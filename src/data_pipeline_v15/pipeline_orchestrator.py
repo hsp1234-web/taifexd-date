@@ -1,6 +1,7 @@
 import os
 import shutil
 import time
+import json # Added import
 from datetime import datetime
 
 import duckdb
@@ -66,24 +67,53 @@ class PipelineOrchestrator:
         self.db_path = os.path.join(self.project_path, DB_DIR)
         self.log_path = os.path.join(self.project_path, LOG_DIR)
 
-        # Ensure the database directory exists before DatabaseLoader tries to connect
-        os.makedirs(self.db_path, exist_ok=True) # db_path needs to be defined first
-
         # --- 參數設定 ---
         self.debug_mode = debug_mode
-        # Logger setup needs log_path, so it comes after path setup.
+
+        # Ensure the log directory exists *before* setting up the logger's file handler.
+        os.makedirs(self.log_path, exist_ok=True)
+
+        # Logger setup needs log_path.
         self.logger = setup_logger(self.log_path, log_name, debug_mode)
 
-        # Now that logger and paths are set, setup directories.
+        # Now that the logger is initialized, setup all other project directories.
+        # This will also re-ensure log_path and db_path exist, which is fine.
         self._setup_directories()
 
+        # Ensure the database directory exists (primarily for DatabaseLoader's immediate use if needed)
+        # _setup_directories already ensures this, but an explicit call here might be for clarity
+        # or specific timing if DatabaseLoader was initialized earlier.
+        # Given current structure, _setup_directories handles it.
+        # For robustness, ensuring db_path specifically if used before db_loader init:
+        os.makedirs(self.db_path, exist_ok=True)
+
         self.database_file = os.path.join(self.db_path, database_name)
-        self.schemas_config = {} # Added as per requirement
+
+        # --- 載入 Schemas 設定 ---
+        schemas_file_path = os.path.join(self.project_path, "config", "schemas.json")
+        self.schemas_config = {}
+        if os.path.exists(schemas_file_path):
+            try:
+                with open(schemas_file_path, "r", encoding="utf-8") as f:
+                    self.schemas_config = json.load(f)
+                self.logger.info(f"成功從 '{schemas_file_path}' 載入 schemas 設定。")
+            except json.JSONDecodeError as e:
+                self.logger.error(f"解析 schemas 設定檔 '{schemas_file_path}' 失敗: {e}")
+                self.schemas_config = {} # Keep it as an empty dict on error
+            except Exception as e:
+                self.logger.error(f"讀取 schemas 設定檔 '{schemas_file_path}' 時發生其他錯誤: {e}")
+                self.schemas_config = {} # Keep it as an empty dict on error
+        else:
+            self.logger.error(f"Schemas 設定檔 '{schemas_file_path}' 不存在。FileParser 將使用空設定。")
+            self.schemas_config = {}
+
 
         # --- 模組初始化 ---
-        manifest_file_path = os.path.join(self.project_path, "manifest.json") # Define manifest file path
+        # Manifest should be in the archive directory
+        manifest_file_path = os.path.join(self.archive_path, "manifest.json")
         self.manifest_manager = ManifestManager(manifest_path=manifest_file_path, logger=self.logger)
-        self.file_parser = FileParser(self.manifest_manager, self.logger) # FileParser now takes manifest_manager and logger
+        # Pass schemas_config to FileParser constructor
+        self.file_parser = FileParser(self.manifest_manager, self.logger, self.schemas_config)
         self.db_loader = DatabaseLoader(self.database_file, self.logger)
 
         # --- 目標檔案處理 ---
@@ -178,7 +208,8 @@ class PipelineOrchestrator:
                     continue
 
                 # Call the refactored file_parser's parse_file method
-                parse_result = self.file_parser.parse_file(file_path, self.processed_path, self.schemas_config)
+                # schemas_config is no longer passed here
+                parse_result = self.file_parser.parse_file(file_path, self.processed_path)
 
                 overall_status_for_manifest = parse_result.get(constants.KEY_STATUS, constants.STATUS_ERROR)
                 overall_message_for_manifest = parse_result.get(constants.KEY_REASON, f"檔案 '{filename}' 處理時遇到未知狀況。")
@@ -213,8 +244,8 @@ class PipelineOrchestrator:
                         if item_status == constants.STATUS_SUCCESS and item_path and item_table:
                             self.logger.info(f"子項目 '{item_display_name}' (來自 {filename}) 解析成功，共 {item_data_count} 筆資料。表格: {item_table}, 路徑: {item_path}。")
                             try:
-                                # Assuming DatabaseLoader.load_data(table_name, parquet_file_path)
-                                self.db_loader.load_data(item_table, item_path)
+                                # Use the new load_parquet method
+                                self.db_loader.load_parquet(item_table, item_path)
                                 self.logger.info(f"子項目 '{item_display_name}' 的資料已成功載入資料庫。")
                                 successful_sub_files += 1
                                 at_least_one_sub_file_db_loaded = True # Key for moving ZIP to processed
@@ -252,8 +283,8 @@ class PipelineOrchestrator:
                     if parquet_path and table_name:
                         self.logger.info(f"檔案 '{filename}' 解析成功，共 {file_data_count} 筆資料。表格: {table_name}, 路徑: {parquet_path}")
                         try:
-                            # Assuming DatabaseLoader.load_data(table_name, parquet_file_path)
-                            self.db_loader.load_data(table_name, parquet_path)
+                            # Use the new load_parquet method
+                            self.db_loader.load_parquet(table_name, parquet_path)
                             self.logger.info(f"檔案 '{filename}' 的資料已成功載入資料庫。")
                             move_to_processed = True
                             overall_message_for_manifest = f"檔案 '{filename}' 成功處理並載入 {file_data_count} 筆記錄到表格 '{table_name}'。"
