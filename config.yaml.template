@@ -1,0 +1,23 @@
+# Project folder name
+project_folder: "MyTaifexDataProject"
+
+# Database file name
+database_name: "processed_data.duckdb"
+
+# Log file name
+log_name: "pipeline.log"
+
+# Local workspace path for temporary processing
+local_workspace: "/tmp/taifex_data_workspace"
+
+# Remote base path (e.g., Google Drive)
+remote_base_path: "/content/drive/MyDrive"
+
+# Directory settings (relative to project_folder)
+directories:
+  input: "00_input"       # Directory for input files
+  processed: "01_processed" # Directory for processed files
+  archive: "02_archive"     # Directory for archived files (e.g., manifest.json)
+  quarantine: "03_quarantine" # Directory for quarantined files
+  db: "98_database"       # Directory for the database
+  log: "99_logs"        # Directory for log files
