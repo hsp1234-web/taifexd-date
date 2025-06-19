@@ -1,6 +1,25 @@
 import argparse
 import os
+import yaml
+import logging
 from src.data_pipeline_v15.pipeline_orchestrator import PipelineOrchestrator
+
+# --- 全域設定 ---
+CONFIG_FILE = "config.yaml"
+
+def load_config():
+    """載入設定檔"""
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        logging.warning(f"警告: 設定檔 {CONFIG_FILE} 未找到。將使用預設值。")
+        return {}
+    except yaml.YAMLError as e:
+        logging.error(f"錯誤: 設定檔 {CONFIG_FILE} 解析失敗: {e}")
+        return {}
+
+config = load_config()
 
 def parse_arguments():
     """
@@ -13,19 +32,19 @@ def parse_arguments():
     parser.add_argument(
         "--project-folder-name",
         type=str,
-        default="MyTaifexDataProject",
+        default=config.get("project_folder", "MyTaifexDataProject"),
         help="在 Google Drive 或本地環境中建立的專案主資料夾名稱。"
     )
     parser.add_argument(
         "--database-name",
         type=str,
-        default="processed_data.duckdb",
+        default=config.get("database_name", "processed_data.duckdb"),
         help="輸出的 DuckDB 資料庫檔案名稱。"
     )
     parser.add_argument(
         "--log-name",
         type=str,
-        default="pipeline.log",
+        default=config.get("log_name", "pipeline.log"),
         help="輸出的日誌檔案名稱。"
     )
     parser.add_argument(
@@ -61,15 +80,19 @@ def main():
         print("ℹ️ 未偵測到 --no-gdrive 旗標，將在 Google Drive 整合模式下執行。")
     
     # 建立管線協調器並執行
+    # project_folder_name, database_name, log_name 會從 config.yaml 讀取
+    # 或者如果使用者透過命令列參數覆蓋，則使用命令列參數的值
     orchestrator = PipelineOrchestrator(
+        config_file_path=CONFIG_FILE, # 傳遞設定檔路徑
         base_path=base_path,
-        project_folder_name=args.project_folder_name,
-        database_name=args.database_name,
-        log_name=args.log_name,
+        project_folder_name_override=args.project_folder_name, # 允許命令列覆蓋
+        database_name_override=args.database_name,       # 允許命令列覆蓋
+        log_name_override=args.log_name,             # 允許命令列覆蓋
         target_zip_files=args.zip_files,
         debug_mode=args.debug
     )
     orchestrator.run()
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     main()
