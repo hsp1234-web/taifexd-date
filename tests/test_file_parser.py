@@ -6,18 +6,19 @@ import pandas as pd
 import os
 import logging
 import copy
+from io import BytesIO # Added for the new test
 from pathlib import Path
 from unittest.mock import MagicMock # Correct import for MagicMock
 
 # Imports from project source
 from src.data_pipeline_v15.file_parser import FileParser
 from src.data_pipeline_v15.core import constants
-from src.data_pipeline_v15.manifest_manager import FileManifest # For mocking
+from src.data_pipeline_v15.manifest_manager import ManifestManager # For mocking
 
 # --- Mocking Fixtures ---
 @pytest.fixture
 def mock_manifest_manager():
-    return MagicMock(spec=FileManifest)
+    return MagicMock(spec=ManifestManager)
 
 @pytest.fixture
 def mock_logger():
@@ -178,6 +179,120 @@ def test_parse_single_csv_normal_big5(file_parser_instance, normal_big5_csv_path
     assert result[constants.KEY_STATUS] == constants.STATUS_ERROR
     assert result[constants.KEY_FILE] == normal_big5_csv_path.name
     assert "欄位重命名後" in result[constants.KEY_REASON] # Or similar error about no matching columns
+
+def test_parse_single_csv_generic_name_matches_default_daily(file_parser_instance, schemas_json_content, tmp_path):
+    # Content for a CSV file that matches the 'default_daily' schema structure
+    # Using some common column names that 'default_daily' might expect or alias
+    csv_content_str = """交易日期,契約,開盤價,最高價,最低價,收盤價,成交量
+2023/12/1,TXF202312,17000,17050,16950,17020,1500
+2023/12/1,TXF202401,17020,17070,16970,17040,800
+"""
+
+    # Create a temporary CSV file with a generic name
+    # The keyword 'csv' is in default_daily's keywords, so this will likely ensure it's considered.
+    # The main point is the absence of other specific keywords like 'weekly_report', 'opendata', etc.
+    csv_filename = "generic_daily_data.csv"
+    csv_file_path = tmp_path / csv_filename
+    with open(csv_file_path, "w", encoding="utf-8") as f:
+        f.write(csv_content_str)
+
+    result = file_parser_instance.parse_file(str(csv_file_path), str(tmp_path), schemas_json_content)
+
+    # Expected to be processed by 'default_daily'
+    expected_schema_name = "default_daily"
+
+    assert result[constants.KEY_STATUS] == constants.STATUS_SUCCESS
+    assert result[constants.KEY_FILE] == csv_filename
+    assert result[constants.KEY_TABLE] == expected_schema_name
+    assert result[constants.KEY_COUNT] == 2
+
+    parquet_path_str = result[constants.KEY_PATH]
+    assert parquet_path_str is not None
+    parquet_file = Path(parquet_path_str)
+    assert parquet_file.exists()
+
+    df = pd.read_parquet(parquet_file)
+    assert df.shape[0] == 2
+
+    expected_cols = list(schemas_json_content[expected_schema_name]["columns_map"].keys())
+    assert list(df.columns) == expected_cols
+
+    # Check some data integrity based on 'default_daily' schema
+    # '交易日期' -> 'trading_date'
+    # '契約' -> 'product_id'
+    # '開盤價' -> 'open'
+    # '最高價' -> 'high'
+    # '最低價' -> 'low'
+    # '收盤價' -> 'close'
+    # '成交量' -> 'volume'
+    assert df.loc[0, "trading_date"] == "2023/12/1"
+    assert df.loc[0, "product_id"] == "TXF202312"
+    assert df.loc[0, "open"] == 17000
+    assert df.loc[0, "volume"] == 1500
+    assert df.loc[1, "product_id"] == "TXF202401"
+    assert df.loc[1, "close"] == 17040
+
+    # Check a column that wasn't in the CSV but is in default_daily schema (should be NaN or None)
+    if "open_interest" in df.columns:
+        assert pd.isna(df.loc[0, "open_interest"])
+
+def test_parse_single_csv_incomplete_fields_matches_weekly_report(file_parser_instance, schemas_json_content, tmp_path):
+    # Content for a CSV file that matches 'weekly_report' schema by filename, but is missing some columns
+    # Missing '多方交易金額' and '空方交易金額' compared to a full 'weekly_report'
+    csv_content_str = """日期,商品名稱,身份別,多方交易口數,空方交易口數
+2023/11/15,臺股期貨,投信,300,150
+2023/11/16,電子期貨,自營商,250,120
+"""
+
+    # Create a temporary CSV file with a name that includes a 'weekly_report' keyword
+    csv_filename = "opendata_incomplete_weekly_data.csv"
+    csv_file_path = tmp_path / csv_filename
+    with open(csv_file_path, "w", encoding="utf-8") as f:
+        f.write(csv_content_str)
+
+    result = file_parser_instance.parse_file(str(csv_file_path), str(tmp_path), schemas_json_content)
+
+    expected_schema_name = "weekly_report"
+
+    assert result[constants.KEY_STATUS] == constants.STATUS_SUCCESS
+    assert result[constants.KEY_FILE] == csv_filename
+    assert result[constants.KEY_TABLE] == expected_schema_name
+    assert result[constants.KEY_COUNT] == 2
+
+    parquet_path_str = result[constants.KEY_PATH]
+    assert parquet_path_str is not None
+    parquet_file = Path(parquet_path_str)
+    assert parquet_file.exists()
+
+    df = pd.read_parquet(parquet_file)
+    assert df.shape[0] == 2
+
+    expected_cols = list(schemas_json_content[expected_schema_name]["columns_map"].keys())
+    assert list(df.columns) == expected_cols # All columns from schema should be present
+
+    # Check data for present columns
+    # '日期' -> 'trading_date'
+    # '商品名稱' -> 'product_name'
+    # '身份別' -> 'investor_type'
+    # '多方交易口數' -> 'long_pos_volume'
+    # '空方交易口數' -> 'short_pos_volume'
+    assert df.loc[0, "trading_date"] == "2023/11/15"
+    assert df.loc[0, "product_name"] == "臺股期貨"
+    assert df.loc[0, "investor_type"] == "投信"
+    assert df.loc[0, "long_pos_volume"] == 300
+    assert df.loc[1, "short_pos_volume"] == 120
+
+    # Check data for columns that were missing in CSV but are in 'weekly_report' schema
+    # These should be present in Parquet as NaN (or None for object types, but pandas usually uses NaN for numeric types)
+    # 'long_pos_value' (多方交易金額)
+    # 'short_pos_value' (空方交易金額)
+    assert "long_pos_value" in df.columns
+    assert pd.isna(df.loc[0, "long_pos_value"])
+    assert pd.isna(df.loc[1, "long_pos_value"])
+
+    assert "short_pos_value" in df.columns
+    assert pd.isna(df.loc[0, "short_pos_value"])
+    assert pd.isna(df.loc[1, "short_pos_value"])
 
 def test_parse_single_csv_file_not_found(file_parser_instance, schemas_json_content, tmp_path):
     result = file_parser_instance.parse_file("tests/fixtures/csvs/non_existent_file.csv", str(tmp_path), schemas_json_content)
@@ -365,6 +480,115 @@ def test_parse_zip_partial_success(file_parser_instance, zip_partial_success_pat
 
     assert res_bad[constants.KEY_STATUS] == constants.STATUS_ERROR
     assert "無法使用支援的編碼解碼" in res_bad[constants.KEY_REASON]
+
+def test_parse_zip_with_big5_csv_matching_weekly_report(file_parser_instance, schemas_json_content, tmp_path, create_zip_in_memory):
+    # Content for a CSV file that matches the 'weekly_report' schema
+    csv_content_str = """日期,商品名稱,身份別,多方交易口數,多方交易金額,空方交易口數,空方交易金額
+2023/10/1,臺股期貨,投信,100,1000000,50,500000
+2023/10/2,電子期貨,外資,200,2000000,150,1500000
+""" # Corrected dates like 01 to 1
+    # Encode the CSV content to Big5
+    csv_content_big5 = csv_content_str.encode('big5')
+
+    # Create a zip file in memory
+    # The filename inside the zip should contain a keyword for 'weekly_report' schema
+    zip_filename_internal = "opendata_weekly_report_big5.csv"
+    zip_file_io = create_zip_in_memory({zip_filename_internal: csv_content_big5})
+
+    # Create a temporary file for the zip to be written to, so FileParser can read it from a path
+    zip_outer_filename = "test_zip_big5_wr.zip"
+    zip_file_path = tmp_path / zip_outer_filename
+    with open(zip_file_path, "wb") as f:
+        f.write(zip_file_io.getvalue())
+
+    result = file_parser_instance.parse_file(str(zip_file_path), str(tmp_path), schemas_json_content)
+
+    assert result[constants.KEY_STATUS] == constants.STATUS_GROUP_RESULT
+    assert result[constants.KEY_FILE] == zip_outer_filename
+    assert len(result[constants.KEY_RESULTS]) == 1
+
+    item_result = result[constants.KEY_RESULTS][0]
+    assert item_result[constants.KEY_STATUS] == constants.STATUS_SUCCESS
+    assert item_result[constants.KEY_FILE] == f"{zip_outer_filename}/{zip_filename_internal}"
+
+    expected_schema_name = "weekly_report"
+    assert item_result[constants.KEY_TABLE] == expected_schema_name
+    assert item_result[constants.KEY_COUNT] == 2 # Number of data rows
+
+    # Use the existing check_parquet_output helper if suitable, or adapt checks
+    # Need to ensure 'check_parquet_output' is available in the scope or defined/imported
+    # For now, let's do some direct checks on the parquet file
+
+    parquet_path_str = item_result[constants.KEY_PATH]
+    assert parquet_path_str is not None
+    parquet_file = Path(parquet_path_str) # Requires from pathlib import Path
+    assert parquet_file.exists()
+
+    df = pd.read_parquet(parquet_file) # Requires import pandas as pd
+    assert df.shape[0] == 2
+
+    expected_cols = list(schemas_json_content[expected_schema_name]["columns_map"].keys())
+    assert list(df.columns) == expected_cols
+
+    # Check some data integrity
+    assert df.loc[0, "product_name"] == "臺股期貨" # Big5 decoding check
+    assert df.loc[0, "long_pos_volume"] == 100
+    assert df.loc[1, "investor_type"] == "外資"
+    assert df.loc[1, "short_pos_volume"] == 150
+
+    # Clean up the created parquet file's directory structure (optional, tmp_path handles it)
+    # shutil.rmtree(tmp_path / expected_schema_name)
+
+def test_parse_zip_with_utf8_csv_matching_weekly_report(file_parser_instance, schemas_json_content, tmp_path, create_zip_in_memory):
+    # Content for a CSV file that matches the 'weekly_report' schema
+    csv_content_str = """日期,商品名稱,身份別,多方交易口數,多方交易金額,空方交易口數,空方交易金額
+2023/11/1,臺股期貨,自營商,120,1200000,70,700000
+2023/11/2,小型臺指期貨,外資,220,2200000,170,1700000
+"""
+    # Encode the CSV content to UTF-8 (though string literals are often UTF-8 by default in Python 3)
+    csv_content_utf8 = csv_content_str.encode('utf-8')
+
+    # Create a zip file in memory
+    # The filename inside the zip should contain a keyword for 'weekly_report' schema
+    zip_filename_internal = "opendata_weekly_report_utf8.csv"
+    zip_file_io = create_zip_in_memory({zip_filename_internal: csv_content_utf8})
+
+    # Create a temporary file for the zip to be written to, so FileParser can read it from a path
+    zip_outer_filename = "test_zip_utf8_wr.zip"
+    zip_file_path = tmp_path / zip_outer_filename
+    with open(zip_file_path, "wb") as f:
+        f.write(zip_file_io.getvalue())
+
+    result = file_parser_instance.parse_file(str(zip_file_path), str(tmp_path), schemas_json_content)
+
+    assert result[constants.KEY_STATUS] == constants.STATUS_GROUP_RESULT
+    assert result[constants.KEY_FILE] == zip_outer_filename
+    assert len(result[constants.KEY_RESULTS]) == 1
+
+    item_result = result[constants.KEY_RESULTS][0]
+    assert item_result[constants.KEY_STATUS] == constants.STATUS_SUCCESS
+    assert item_result[constants.KEY_FILE] == f"{zip_outer_filename}/{zip_filename_internal}"
+
+    expected_schema_name = "weekly_report"
+    assert item_result[constants.KEY_TABLE] == expected_schema_name
+    assert item_result[constants.KEY_COUNT] == 2 # Number of data rows
+
+    parquet_path_str = item_result[constants.KEY_PATH]
+    assert parquet_path_str is not None
+    parquet_file = Path(parquet_path_str)
+    assert parquet_file.exists()
+
+    df = pd.read_parquet(parquet_file)
+    assert df.shape[0] == 2
+
+    expected_cols = list(schemas_json_content[expected_schema_name]["columns_map"].keys())
+    assert list(df.columns) == expected_cols
+
+    # Check some data integrity
+    assert df.loc[0, "product_name"] == "臺股期貨"
+    assert df.loc[0, "long_pos_volume"] == 120
+    assert df.loc[1, "investor_type"] == "外資"
+    assert df.loc[1, "short_pos_volume"] == 170
 
 def test_staging_dir_usage(file_parser_instance, normal_utf8_csv_path, schemas_json_content, tmp_path):
     """Verifies that the staging_dir is correctly used for output."""
