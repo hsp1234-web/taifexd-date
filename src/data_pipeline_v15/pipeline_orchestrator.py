@@ -67,13 +67,17 @@ class PipelineOrchestrator:
         self.log_path = os.path.join(self.project_path, LOG_DIR)
 
         # Ensure the database directory exists before DatabaseLoader tries to connect
-        os.makedirs(self.db_path, exist_ok=True)
-
-        self.database_file = os.path.join(self.db_path, database_name)
+        os.makedirs(self.db_path, exist_ok=True) # db_path needs to be defined first
 
         # --- 參數設定 ---
         self.debug_mode = debug_mode
+        # Logger setup needs log_path, so it comes after path setup.
         self.logger = setup_logger(self.log_path, log_name, debug_mode)
+
+        # Now that logger and paths are set, setup directories.
+        self._setup_directories()
+
+        self.database_file = os.path.join(self.db_path, database_name)
         self.schemas_config = {} # Added as per requirement
 
         # --- 模組初始化 ---
@@ -126,10 +130,7 @@ class PipelineOrchestrator:
             self.logger.debug(get_hardware_usage("管線啟動前"))
 
         try:
-            # 1. 設定資料夾
-            self._setup_directories()
-
-            # 2. 載入或建立 Manifest
+            # 1. 載入或建立 Manifest
             self.logger.info("正在載入處理紀錄 (manifest)...")
             self.manifest_manager.load_or_create_manifest()
 
@@ -154,6 +155,13 @@ class PipelineOrchestrator:
                 file_path = os.path.join(self.input_path, filename)
                 if not os.path.isfile(file_path):
                     self.logger.debug(f"Skipping non-file item: {filename}")
+                    continue
+
+                # NEW: Check for supported file extensions
+                if not filename.lower().endswith(('.zip', '.csv')):
+                    self.logger.warning(f"檔案 '{filename}' 的副檔名不受支援，將跳過處理。僅支援 .zip 和 .csv 檔案。")
+                    # Optionally, update manifest for skipped unsupported files
+                    # self.manifest_manager.update_manifest(filename, STATUS_SKIPPED, "Unsupported file extension")
                     continue
 
                 self.logger.info(f"--- 開始處理檔案: {filename} ---")
