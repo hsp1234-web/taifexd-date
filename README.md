@@ -12,21 +12,20 @@
 
 ### 首次設定
 
-1.  點擊上方的 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TaifexDataService/taifexd-data/blob/main/data_pipeline_v15/run_stable.ipynb) 徽章，開啟公版「樣板筆記本」。
-2.  在 Colab 選單中，點擊 **「檔案」(File)** -> **「在雲端硬碟中儲存複本」(Save a copy in Drive)**。
-3.  這會在您的 Google Drive 中建立一個專屬於您的「個人版筆記本」。**請關閉公版，並在您個人的版本上進行所有後續操作。**
+1. 點擊上方的 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TaifexDataService/taifexd-data/blob/main/data_pipeline_v15/run_stable.ipynb) 徽章，開啟公版「樣板筆記本」。
+2. 在 Colab 選單中，點擊 **「檔案」(File)** -> **「在雲端硬碟中儲存複本」(Save a copy in Drive)**。
+3. 這會在您的 Google Drive 中建立一個專屬於您的「個人版筆記本」。**請關閉公版，並在您個人的版本上進行所有後續操作。**
 
 ### 日常執行
 
-1.  從您的 Google Drive 開啟您的「個人版筆記本」。
-2.  執行第一個儲存格，它會自動檢查是否有新版本，並讓您設定本次執行的參數（例如要處理的特定檔案）。
-3.  依照筆記本中的引導完成操作即可。
+1. 從您的 Google Drive 開啟您的「個人版筆記本」。
+2. 執行第一個儲存格，它會自動從 GitHub 下載最新程式碼、安裝精確的套件版本，並讓您設定本次執行的參數。
+3. 依照筆記本中的引導完成操作即可。
 
 ## 預期 Google Drive 資料夾結構
 
 本專案會在您的 Google Drive 根目錄下，尋找您所設定的專案資料夾（預設為 `MyTaifexDataProject`）。請確保您的資料夾結構如下：
 
-```
 MyTaifexDataProject/
 │
 ├── Input/
@@ -40,4 +39,3 @@ MyTaifexDataProject/
     │   └── processed_data.duckdb (此檔名可由參數控制)
     └── log/
         └── pipeline.log (此檔名可由參數控制)
-```
