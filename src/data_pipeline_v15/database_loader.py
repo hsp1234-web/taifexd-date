@@ -143,57 +143,50 @@ class DatabaseLoader:
             # Check if table exists
             check_table_exists_sql = f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'"
             table_exists = self.connection.execute(check_table_exists_sql).fetchone()
+            pk_columns = self.table_primary_keys.get(table_name)
 
             if not table_exists:
-                pk_columns = self.table_primary_keys.get(table_name)
                 if pk_columns:
                     self.logger.info(f"資料表 '{table_name}' 不存在，將使用定義的主鍵 {pk_columns} 建立。")
-                    # Describe Parquet to get column names and types
                     cursor = self.connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{parquet_file_path}')")
                     columns_description = cursor.fetchall()
-
-                    column_definitions = []
-                    for col_name_desc, col_type_desc, _, _, _, _ in columns_description:
-                        # Ensure column names are quoted if they contain special characters or are keywords
-                        column_definitions.append(f'"{col_name_desc}" {col_type_desc}')
-
-                    create_table_statement = f'CREATE TABLE "{table_name}" ({", ".join(column_definitions)}'
-
-                    # Ensure primary key column names are also quoted
-                    quoted_pk_columns = [f'"{col}"' for col in pk_columns]
-                    create_table_statement += f', PRIMARY KEY ({", ".join(quoted_pk_columns)})'
-                    create_table_statement += ');'
-
+                    column_definitions = [f'"{col_name_desc}" {col_type_desc}' for col_name_desc, col_type_desc, _, _, _, _ in columns_description]
+                    # Corrected f-string for pk_columns
+                    quoted_pk_columns = [f'"{pk}"' for pk in pk_columns]
+                    create_table_statement = f'CREATE TABLE "{table_name}" ({", ".join(column_definitions)}, PRIMARY KEY ({", ".join(quoted_pk_columns)}));'
                     self.connection.execute(create_table_statement)
                     self.logger.info(f"資料表 '{table_name}' 已使用定義的欄位和主鍵建立。")
-                else:
+                else: # No primary keys defined for this table
                     self.logger.warning(
-                        f"資料表 '{table_name}' 在 schemas.json 中沒有找到主鍵定義。"
-                        "將使用 Parquet 結構建立表格，ON CONFLICT 可能無法按預期工作或會基於所有欄位。"
+                        f"資料表 '{table_name}' 在 schemas.json 中沒有找到主鍵定義，且資料表不存在。"
+                        "將基於 Parquet 結構建立表格。"
                     )
-                    # Fallback to old method if no primary key defined
                     create_table_sql = f"""
-                    CREATE TABLE IF NOT EXISTS "{table_name}" AS
-                    SELECT * FROM read_parquet('{parquet_file_path}') LIMIT 0;
-                    """
+                    CREATE TABLE "{table_name}" AS SELECT * FROM read_parquet('{parquet_file_path}') LIMIT 0;
+                    """ # Create empty table with schema from parquet
                     self.connection.execute(create_table_sql)
-                    self.logger.info(f"資料表 '{table_name}' 結構已基於 Parquet 檔案確認/建立 (無顯式主鍵)。")
+                    self.logger.info(f"資料表 '{table_name}' 結構已基於 Parquet 檔案建立 (無主鍵)。")
             else:
                  self.logger.info(f"資料表 '{table_name}' 已存在。將嘗試插入資料。")
-
 
             # Get current total row count in the table BEFORE insert
             count_before_query = f'SELECT COUNT(*) FROM "{table_name}"'
             count_before = self.connection.execute(count_before_query).fetchone()[0]
 
-            # Insert data using ON CONFLICT DO NOTHING
-            insert_sql = f"""
-            INSERT INTO "{table_name}"
-            SELECT * FROM read_parquet('{parquet_file_path}')
-            ON CONFLICT DO NOTHING;
-            """
+            # Construct insert SQL based on whether primary keys are defined
+            if pk_columns:
+                pk_conflict_target = ", ".join([f'"{pk}"' for pk in pk_columns])
+                insert_sql = (
+                    f"INSERT INTO \"{table_name}\" SELECT * FROM read_parquet('{parquet_file_path}') "
+                    f"ON CONFLICT ({pk_conflict_target}) DO NOTHING;"
+                )
+                self.logger.info(f"資料將使用 ON CONFLICT ({pk_conflict_target}) DO NOTHING 策略載入至資料表 '{table_name}'。")
+            else: # No primary keys, simple insert
+                insert_sql = f"INSERT INTO \"{table_name}\" SELECT * FROM read_parquet('{parquet_file_path}');"
+                self.logger.info(f"資料將直接插入資料表 '{table_name}' (無主鍵定義，不進行衝突檢查)。")
+
             self.connection.execute(insert_sql)
-            self.logger.info(f"資料已使用 ON CONFLICT DO NOTHING 策略嘗試載入至資料表 '{table_name}'。")
+            # self.logger.info(f"資料已使用相應策略嘗試載入至資料表 '{table_name}'。") # Message now more specific above
 
             # Get current total row count in the table AFTER insert
             count_after = self.connection.execute(count_before_query).fetchone()[0]

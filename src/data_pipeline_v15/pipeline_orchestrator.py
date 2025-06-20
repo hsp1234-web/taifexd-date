@@ -26,7 +26,7 @@ from .core.constants import (
     STATUS_SKIPPED,
 )
 from .core import constants  # Added to allow access to constants like constants.KEY_STATUS
-from .data_transformer import DataTransformer # Added for new transformation stage
+# from .data_transformer import DataTransformer # Removed DataTransformer integration
 from .database_loader import DatabaseLoader
 from .file_parser import FileParser
 from .manifest_manager import ManifestManager
@@ -216,10 +216,6 @@ class PipelineOrchestrator:
         # Initialize Validator
         validation_rules = self.config.get("validation_rules", {})
         self.validator = Validator(validation_rules, self.logger)
-
-        # Initialize DataTransformer
-        self.data_transformer = DataTransformer(db_path=str(self.local_database_file))
-        self.logger.info(f"DataTransformer initialized with DB path: {self.local_database_file}")
 
         # Initialize report_stats
         self.report_stats = {
@@ -630,18 +626,6 @@ class PipelineOrchestrator:
                 self.logger.info(f"--- 檔案 '{filename}' 處理完畢。最終狀態: {final_overall_status_for_file} ---")
             self.logger.info("所有檔案解析結果處理完成。")
 
-            # --- Data Transformation Stage ---
-            self.logger.info("--- 開始數據轉換階段 ---")
-            try:
-                with self.data_transformer as transformer:
-                    transformer.transform_data()
-                self.logger.info("✅ 數據轉換階段成功完成。")
-            except Exception as e_transform:
-                self.logger.error(f"數據轉換階段發生錯誤: {e_transform}", exc_info=True)
-                # Decide if this error should be critical to the pipeline
-                # For now, logging the error and continuing.
-            self.logger.info("--- 數據轉換階段結束 ---")
-
             # Cleanup temp intermediate parquets dir
             temp_intermediate_parquets_dir = self.local_project_path / "temp_intermediate_parquets"
             if temp_intermediate_parquets_dir.exists():
@@ -652,6 +636,11 @@ class PipelineOrchestrator:
                     self.logger.warning(f"清理臨時 Parquet 資料夾 {temp_intermediate_parquets_dir} 失敗: {e_clean_temp}")
 
             # D. End-of-run Sync (Local to Remote)
+            # Ensure DB connection is closed before syncing the DB file
+            if self.db_loader:
+                self.db_loader.close_connection()
+                self.logger.info("本地資料庫連接已在同步前回饋時關閉。")
+
             self.logger.info("--- 開始結束時同步 (本地 -> 遠端) ---")
             self._sync_file(self.local_database_file, self.remote_database_file, "to_remote")
             self._sync_file(self.local_manifest_file, self.remote_manifest_file, "to_remote")
