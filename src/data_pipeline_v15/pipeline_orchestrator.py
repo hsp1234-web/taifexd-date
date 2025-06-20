@@ -46,7 +46,7 @@ class PipelineOrchestrator:
         project_folder_name_override: str = None, # Allow override from main.py args
         database_name_override: str = None,       # Allow override from main.py args
         log_name_override: str = None,             # Allow override from main.py args
-        target_zip_files: str,
+        target_zip_files: str = "", # Default to empty string
         debug_mode: bool = False,
         schemas_file_path: str = None, # Optional path for schemas
     ):
@@ -105,9 +105,13 @@ class PipelineOrchestrator:
 
         self.debug_mode = debug_mode
 
-        # Logger setup now uses local log path. Logs will be synced back.
+        # Ensure local log path exists before setting up logger
         Path(self.local_log_path).mkdir(parents=True, exist_ok=True)
         self.logger = setup_logger(self.local_log_path, self.log_name, debug_mode) # Use self.log_name
+
+        # Call _setup_local_directories early, before other components are initialized
+        # This ensures paths for DB, manifest, etc., are ready.
+        self._setup_local_directories() # Moved this call earlier
 
         # Determine max_workers for parallel processing
         config_max_workers = self.config.get("max_workers")
@@ -201,9 +205,9 @@ class PipelineOrchestrator:
             self.logger.warning(f"Schemas 設定檔 '{effective_schemas_file_path_str}' 不存在。FileParser 將使用空設定。") # Changed to warning
             self.schemas_config = {}
 
-
         # --- 模組初始化 ---
         # ManifestManager and DatabaseLoader now operate on local paths
+        # Local directories including DB path are now created by _setup_local_directories() above.
         self.manifest_manager = ManifestManager(manifest_path=self.local_manifest_file, logger=self.logger)
         self.file_parser = FileParser(self.manifest_manager, self.logger, self.schemas_config)
         self.db_loader = DatabaseLoader(self.local_database_file, self.logger) # Operates on local DB file
@@ -432,10 +436,11 @@ class PipelineOrchestrator:
             self.logger.debug(get_hardware_usage("管線啟動前 (本地優先, 並行)"))
 
         run_had_critical_failure = False # Flag to track if critical exception occurs
+        start_time_perf = time.time() # For performance timing
 
         try:
-            self._setup_local_directories()
-            self._create_remote_directories_if_not_exist()
+            # self._setup_local_directories() # Moved to __init__
+            self._create_remote_directories_if_not_exist() # Remote dirs can be checked/created at start of run
 
             self.logger.info("--- 開始啟動時同步 (遠端 -> 本地) ---")
             self._sync_directory_content(self.remote_input_path, self.local_input_path, "to_local")
@@ -466,6 +471,12 @@ class PipelineOrchestrator:
             processed_file_results = []
             if files_to_process_names: # Only run executor if there are files
                 self.logger.info(f"開始並行處理檔案解析，最大工作程序數: {self.max_workers}")
+
+                # Close DB connection before ProcessPoolExecutor to avoid pickling issues
+                if self.db_loader:
+                    self.db_loader.close_connection()
+                    self.logger.info("暫時關閉資料庫連線以進行並行處理。")
+
                 with concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers) as executor:
                     # Submit tasks to the executor
                     future_to_filename = {executor.submit(self._process_single_file, filename): filename for filename in files_to_process_names}
@@ -485,6 +496,11 @@ class PipelineOrchestrator:
                                 "parquet_path": None, "table_name": None, "data_count": 0
                             })
                 self.logger.info("所有檔案解析任務已完成。")
+
+                # Re-establish DB connection after ProcessPoolExecutor
+                if self.db_loader:
+                    self.db_loader._connect() # Assuming _connect can be called to re-establish
+                    self.logger.info("重新建立資料庫連線以進行後續處理。")
 
             # 主程序中串列處理結果 (資料庫載入、檔案移動、Manifest 更新)
             self.logger.info("開始串列處理檔案解析結果...")
@@ -603,8 +619,8 @@ class PipelineOrchestrator:
                     str(original_file_path), # Path for hashing or identification
                     final_overall_status_for_file,
                     final_overall_message_for_file,
-                    original_filename=filename, # This is display_name
-                    file_hash_override=file_hash
+                    original_filename=filename # This is display_name
+                    # file_hash_override was removed as it's not an accepted argument
                 )
                 self.logger.info(f"--- 檔案 '{filename}' 處理完畢。最終狀態: {final_overall_status_for_file} ---")
             self.logger.info("所有檔案解析結果處理完成。")
@@ -646,9 +662,9 @@ class PipelineOrchestrator:
                 self.logger.info("本地工作區路徑未定義，跳過清理。")
 
 
-            end_time = time.time()
+            end_time_perf = time.time() # For performance timing
             self.logger.info(f"====== 數據管線 (本地優先, 並行) 執行完畢 @ {datetime.now():%Y-%m-%d %H:%M:%S} ======")
-            self.logger.info(f"總耗時: {end_time - start_time:.2f} 秒")
+            self.logger.info(f"總耗時: {end_time_perf - start_time_perf:.2f} 秒")
             if self.debug_mode:
                 self.logger.debug(get_hardware_usage("管線結束後 (本地優先, 並行)"))
 

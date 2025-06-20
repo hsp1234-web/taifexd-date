@@ -1,15 +1,21 @@
-
-
+import logging
+import pytest # Already there, but good to ensure
+from pathlib import Path
+from datetime import datetime
+import yaml
+import shutil
+import os
+import json # For manifest loading
+import duckdb # For DB verification
 # 從 src 目錄匯入 PipelineOrchestrator 和相關常數
 # (假設 PipelineOrchestrator 在 src/data_pipeline_v15/pipeline_orchestrator.py)
 # (假設 constants 在 src/data_pipeline_v15/core/constants.py)
 from src.data_pipeline_v15.pipeline_orchestrator import PipelineOrchestrator
 from src.data_pipeline_v15.core import constants as pipeline_constants
-
-import pathlib # Added for path manipulation
+import pathlib # Make sure pathlib is imported
 
 # --- 測試主函式 ---
-import yaml
+# import yaml # Already imported above
 
 # Removing old _create_dummy_csv_content and _create_dummy_zip_file as they are replaced by fixtures.
 # If some specific dummy generation is needed for other tests, they can be kept or refactored.
