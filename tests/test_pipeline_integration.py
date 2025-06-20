@@ -1,13 +1,4 @@
-# -*- coding: utf-8 -*-
-import pytest
-import os
-import shutil
-import zipfile
-import hashlib
-import json
-import pandas as pd
-import duckdb
-from datetime import datetime
+
 
 # 從 src 目錄匯入 PipelineOrchestrator 和相關常數
 # (假設 PipelineOrchestrator 在 src/data_pipeline_v15/pipeline_orchestrator.py)
@@ -442,3 +433,4 @@ def test_pipeline_full_run(tmp_path, caplog): # Added caplog fixture
 
     # rows_skipped_on_load_due_to_conflict is 0 because we use fresh DB and PKs are unique for loaded data
     assert report_data["rows_skipped_on_load_due_to_conflict"] == 0
+

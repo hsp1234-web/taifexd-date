@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+
 
 """
 資料庫載入模組
@@ -226,3 +226,4 @@ class DatabaseLoader:
             self.connection.close()
             self.connection = None
             self.logger.info("資料庫連線已成功關閉。")
+

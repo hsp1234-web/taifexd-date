@@ -1,3 +1,4 @@
+
 import os
 import shutil
 import time
@@ -656,3 +657,4 @@ class PipelineOrchestrator:
                 self.logger.info("本地資料庫連接已關閉。")
             else:
                 self.logger.info("DB Loader 未初始化或不存在，無需關閉連接。")
+
