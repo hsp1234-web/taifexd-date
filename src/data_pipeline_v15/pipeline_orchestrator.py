@@ -738,7 +738,27 @@ class PipelineOrchestrator:
                     self.logger.warning(f"清理臨時 Parquet 資料夾 {temp_intermediate_parquets_dir} 失敗: {e_clean_temp}")
 
             # D. End-of-run Sync (Local to Remote)
-            # D. End-of-run Sync (Local to Remote)
+
+            # Log the summary report before final cleanup and sync
+            # Ensure final status is determined
+            if self.report_stats["files_failed_parsing_or_other_error"] > 0 or self.report_stats["files_with_quarantined_rows"] > 0 : # Check if any file had issues
+                if self.report_stats["files_successfully_parsed_and_validated_loaded"] > 0:
+                    self.report_stats["status"] = "PARTIAL_SUCCESS"
+                else:
+                    self.report_stats["status"] = "FAILURE"
+            elif self.report_stats["files_successfully_parsed_and_validated_loaded"] > 0: # All processed files were successful
+                 self.report_stats["status"] = "SUCCESS"
+            elif self.report_stats["files_processed_total"] == 0 : # No files to process
+                 self.report_stats["status"] = "SUCCESS" # Or "NO_FILES_PROCESSED"
+            else: # No files loaded, but some were processed (e.g. all skipped or empty after validation)
+                 self.report_stats["status"] = "UNKNOWN" # Or a more specific status
+
+            end_time_perf = time.time() # For performance timing
+            self.report_stats["end_time"] = datetime.now(pytz.timezone('Asia/Taipei')).isoformat()
+            self.report_stats["total_duration_seconds"] = round(end_time_perf - start_time_perf, 2)
+            self.logger.info(self.report_stats, extra={'event_type': 'execution_summary_report'})
+
+
             # IMPORTANT: Close DB connection BEFORE syncing the DB file to ensure all data is flushed.
             if hasattr(self, 'db_loader') and self.db_loader:
                 self.db_loader.close_connection()
