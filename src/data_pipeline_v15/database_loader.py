@@ -186,14 +186,28 @@ class DatabaseLoader:
             count_before_query = f'SELECT COUNT(*) FROM "{table_name}"'
             count_before = self.connection.execute(count_before_query).fetchone()[0]
 
-            # Insert data using ON CONFLICT DO NOTHING
-            insert_sql = f"""
-            INSERT INTO "{table_name}"
-            SELECT * FROM read_parquet('{parquet_file_path}')
-            ON CONFLICT DO NOTHING;
-            """
+            # Insert data
+            pk_columns = self.table_primary_keys.get(table_name)
+
+            if pk_columns:
+                # If primary keys are defined, use ON CONFLICT DO NOTHING
+                # Ensure primary key column names are quoted for the ON CONFLICT clause
+                pk_conflict_str = ", ".join([f'"{col}"' for col in pk_columns])
+                insert_sql = f"""
+                INSERT INTO "{table_name}"
+                SELECT * FROM read_parquet('{parquet_file_path}')
+                ON CONFLICT ({pk_conflict_str}) DO NOTHING;
+                """
+                self.logger.info(f"資料已使用 ON CONFLICT ({pk_conflict_str}) DO NOTHING 策略嘗試載入至資料表 '{table_name}'。")
+            else:
+                # If no primary keys, use a simple INSERT
+                insert_sql = f"""
+                INSERT INTO "{table_name}"
+                SELECT * FROM read_parquet('{parquet_file_path}');
+                """
+                self.logger.info(f"資料已使用普通 INSERT 策略嘗試載入至資料表 '{table_name}' (無主鍵衝突處理)。")
+
             self.connection.execute(insert_sql)
-            self.logger.info(f"資料已使用 ON CONFLICT DO NOTHING 策略嘗試載入至資料表 '{table_name}'。")
 
             # Get current total row count in the table AFTER insert
             count_after = self.connection.execute(count_before_query).fetchone()[0]
@@ -222,8 +236,19 @@ class DatabaseLoader:
         安全地關閉與資料庫的連線。
         """
         if self.connection:
-            self.logger.info("正在關閉 DuckDB 資料庫連線...")
-            self.connection.close()
-            self.connection = None
-            self.logger.info("資料庫連線已成功關閉。")
+            try:
+                self.logger.info("正在執行 CHECKPOINT 並關閉 DuckDB 資料庫連線...")
+                self.connection.execute("CHECKPOINT;")
+                self.connection.close()
+                self.connection = None # Ensure connection attribute is set to None after closing
+                self.logger.info("資料庫連線已成功 CHECKPOINT 並關閉。")
+            except Exception as e:
+                self.logger.error(f"關閉資料庫連線時發生錯誤 (可能在 CHECKPOINT 期間): {e}", exc_info=True)
+                # Attempt to close again if checkpoint failed but connection is still there
+                if self.connection:
+                    try:
+                        self.connection.close()
+                    except Exception as e_close:
+                        self.logger.error(f"嘗試再次關閉連接失敗: {e_close}", exc_info=True)
+                self.connection = None # Still set to None
 
