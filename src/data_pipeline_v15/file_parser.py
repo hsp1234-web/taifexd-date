@@ -230,16 +230,9 @@ class FileParser:
             print(f"DBG: Target columns for schema {matched_schema_name}: {target_columns} for {display_name}")
 
             # --- Custom data cleaning for specific columns ---
-            # Assuming '成交量' (volume) is mapped to a canonical name like 'volume' in the schema's columns_map
-            # Let's use 'volume' as the canonical name to check for.
-            # This step should be performed AFTER renaming based on schema aliases.
-            canonical_volume_column_name = "volume" # This is an assumption. Actual name comes from schema.
-            # We need to find which of the target_columns corresponds to '成交量' if not directly 'volume'.
-            # For now, we will proceed with the assumption that '成交量' (or its aliases) gets mapped to 'volume'.
-            # A more robust way would be to iterate schema["columns_map"] to find the key whose aliases include '成交量'.
-
+            canonical_volume_column_name = "volume"
             if canonical_volume_column_name in df.columns:
-                self.logger.info(f"檔案 '{display_name}' 偵測到欄位 '{canonical_volume_column_name}'，嘗試進行千分位逗號移除與數值轉換。") # 註：此處 display_name 和 canonical_volume_column_name 是 f-string 變數，保持原樣
+                self.logger.info(f"檔案 '{display_name}' 偵測到欄位 '{canonical_volume_column_name}'，嘗試進行千分位逗號移除與數值轉換。")
                 try:
                     # 確保該欄位轉換為字串型態，以便進行字串操作
                     df[canonical_volume_column_name] = df[canonical_volume_column_name].astype(str)
@@ -254,12 +247,11 @@ class FileParser:
                     # 轉換為數值型態，無效解析則設為 NaN
                     df[canonical_volume_column_name] = pd.to_numeric(df[canonical_volume_column_name], errors='coerce')
 
-                    self.logger.info(f"檔案 '{display_name}' 的 '{canonical_volume_column_name}' 欄位已成功轉換為數值型態。") # 註：同上
+                    self.logger.info(f"檔案 '{display_name}' 的 '{canonical_volume_column_name}' 欄位已成功轉換為數值型態。")
                 except Exception as e_clean:
-                    self.logger.warning(f"檔案 '{display_name}' 在清理 '{canonical_volume_column_name}' 欄位時發生錯誤: {e_clean}。該欄位可能未正確轉換。") # 註：同上
+                    self.logger.warning(f"檔案 '{display_name}' 在清理 '{canonical_volume_column_name}' 欄位時發生錯誤: {e_clean}。該欄位可能未正確轉換。")
             else:
-                # 原有的日誌邏輯保持不變
-                self.logger.debug(f"檔案 '{display_name}' (schema: {matched_schema_name}) 中未找到預期的成交量欄位 '{canonical_volume_column_name}' 供清理，跳過此步驟。") # 註：同上
+                self.logger.debug(f"檔案 '{display_name}' (schema: {matched_schema_name}) 中未找到預期的成交量欄位 '{canonical_volume_column_name}' 供清理，跳過此步驟。")
             # --- End of custom data cleaning ---
 
             # Check if any of the target columns are present after renaming
