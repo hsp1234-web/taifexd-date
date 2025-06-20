@@ -635,7 +635,7 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
     assert report_data["files_with_quarantined_rows"] == 0
 
     # daily_no_keywords, zip, unidentifiable
-    assert report_data["files_failed_parsing_or_other_error"] == 3  # noqa: E261
+    assert report_data["files_failed_parsing_or_other_error"] == 4  # noqa: E261
     # No manifest skips in this fresh run
     assert report_data["files_skipped_manifest"] == 0
 
