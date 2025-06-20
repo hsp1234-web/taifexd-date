@@ -124,27 +124,19 @@ def check_parquet_output(result_item, expected_schema_key, expected_db_table_nam
     assert result_item[constants.KEY_TABLE] == expected_db_table_name # Check against db_table_name
     assert result_item[constants.KEY_COUNT] == expected_rows
 
-    parquet_path_str = result_item[constants.KEY_PATH]
-    assert parquet_path_str is not None
-    parquet_file = Path(parquet_path_str)
+    # KEY_PATH is now expected to be None from FileParser, as Orchestrator handles Parquet writing post-validation.
+    assert result_item.get(constants.KEY_PATH) is None, "KEY_PATH should be None as FileParser no longer writes Parquet."
 
-    # Check path structure: <staging_dir>/<schema_key>/<hash>.parquet
-    assert parquet_file.parent.name == expected_schema_key # Path uses schema_key
-    assert parquet_file.parent.parent == staging_path_obj
-    assert parquet_file.suffix == ".parquet"
-    assert parquet_file.exists()
+    # Instead of reading Parquet, check the DataFrame directly from the result
+    df = result_item.get(constants.KEY_DATAFRAME)
+    assert df is not None, "DataFrame not found in result (constants.KEY_DATAFRAME)."
 
-    if expected_rows > 0 and expected_cols:
-        df = pd.read_parquet(parquet_file)
-        assert df.shape[0] == expected_rows
-        assert list(df.columns) == expected_cols
-    elif expected_rows == 0:
-        # For empty CSVs that are successfully processed (e.g. empty_with_header.csv)
-        # A parquet file might still be created with schema but 0 rows
-        df = pd.read_parquet(parquet_file)
-        assert df.shape[0] == 0
-        if expected_cols:
-             assert list(df.columns) == expected_cols
+    assert df.shape[0] == expected_rows
+    if expected_cols:
+        # Ensure all expected columns are present.
+        # FileParser reindexes to schema's target_columns, so column set and order should match.
+        assert list(df.columns) == expected_cols, \
+            f"DataFrame columns mismatch or order incorrect. Expected: {expected_cols}, Actual: {list(df.columns)}"
 
 
 # --- Single CSV File Processing Tests ---
@@ -160,7 +152,8 @@ def test_parse_single_csv_normal_utf8(file_parser_instance, normal_utf8_csv_path
     expected_cols = list(file_parser_instance.schemas_config[schema_key]["columns_map"].keys())
     check_parquet_output(result, schema_key, db_table_name, 2, tmp_path, expected_cols)
     # Further check content if necessary, e.g. specific values
-    df = pd.read_parquet(result[constants.KEY_PATH])
+    df = result.get(constants.KEY_DATAFRAME) # Check the DataFrame from the result
+    assert df is not None
     assert df.loc[0, "open"] == 15000 # Changed "open_price" to "open"
 
 def test_parse_single_csv_normal_big5(file_parser_instance, normal_big5_csv_path, tmp_path): # schemas_json_content removed from args
@@ -214,12 +207,13 @@ def test_parse_single_csv_generic_name_matches_default_daily(file_parser_instanc
     assert result[constants.KEY_TABLE] == expected_db_table_name
     assert result[constants.KEY_COUNT] == 2
 
-    parquet_path_str = result[constants.KEY_PATH]
-    assert parquet_path_str is not None
-    parquet_file = Path(parquet_path_str)
-    assert parquet_file.exists()
+    # Parquet file is not written by FileParser anymore
+    # parquet_path_str = result[constants.KEY_PATH]
+    # assert parquet_path_str is not None
+    # parquet_file = Path(parquet_path_str)
+    # assert parquet_file.exists()
 
-    df = pd.read_parquet(parquet_file)
+    df = result.get(constants.KEY_DATAFRAME) # Check the DataFrame from the result
     assert df.shape[0] == 2
 
     # Use schemas_json_content directly for verification, not implicitly from file_parser_instance
@@ -269,12 +263,13 @@ def test_parse_single_csv_incomplete_fields_matches_weekly_report(file_parser_in
     assert result[constants.KEY_TABLE] == expected_db_table_name
     assert result[constants.KEY_COUNT] == 2
 
-    parquet_path_str = result[constants.KEY_PATH]
-    assert parquet_path_str is not None
-    parquet_file = Path(parquet_path_str)
-    assert parquet_file.exists()
+    # Parquet file is not written by FileParser anymore
+    # parquet_path_str = result[constants.KEY_PATH]
+    # assert parquet_path_str is not None
+    # parquet_file = Path(parquet_path_str)
+    # assert parquet_file.exists()
 
-    df = pd.read_parquet(parquet_file)
+    df = result.get(constants.KEY_DATAFRAME) # Check the DataFrame from the result
     assert df.shape[0] == 2
 
     # Use schemas_json_content directly for verification
@@ -446,7 +441,12 @@ def test_parse_zip_normal_single_utf8(file_parser_instance, zip_normal_single_ut
     schema_key = "default_daily"
     db_table_name = schemas_json_content[schema_key]["db_table_name"]
     expected_cols = list(schemas_json_content[schema_key]["columns_map"].keys()) # Use schemas_json_content for verification
-    check_parquet_output(item_result, schema_key, db_table_name, 2, tmp_path, expected_cols)
+    # This test is now expected to fail because "volume" is a required column for default_daily
+    # and it's missing in normal_utf8.csv, leading to an all-NaN column for "volume".
+    assert item_result[constants.KEY_STATUS] == constants.STATUS_ERROR
+    assert "內容與 schema 'default_daily' 的必要欄位不符" in item_result[constants.KEY_REASON]
+    assert "缺失或為空的必要欄位: volume" in item_result[constants.KEY_REASON]
+    # check_parquet_output(item_result, schema_key, db_table_name, 2, tmp_path, expected_cols) # Not checking parquet for error status
 
 def test_parse_zip_normal_multiple(file_parser_instance, zip_normal_multiple_path, tmp_path, schemas_json_content): # Added schemas_json_content for verification
     result = file_parser_instance.parse_file(str(zip_normal_multiple_path), str(tmp_path)) # schemas_json_content removed
@@ -572,12 +572,13 @@ def test_parse_zip_with_big5_csv_matching_weekly_report(file_parser_instance, tm
     # Need to ensure 'check_parquet_output' is available in the scope or defined/imported
     # For now, let's do some direct checks on the parquet file
 
-    parquet_path_str = item_result[constants.KEY_PATH]
-    assert parquet_path_str is not None
-    parquet_file = Path(parquet_path_str) # Requires from pathlib import Path
-    assert parquet_file.exists()
+    # Parquet file is not written by FileParser anymore
+    # parquet_path_str = item_result[constants.KEY_PATH]
+    # assert parquet_path_str is not None
+    # parquet_file = Path(parquet_path_str) # Requires from pathlib import Path
+    # assert parquet_file.exists()
 
-    df = pd.read_parquet(parquet_file) # Requires import pandas as pd
+    df = item_result.get(constants.KEY_DATAFRAME) # Check the DataFrame from the result
     assert df.shape[0] == 2
 
     expected_cols = list(schemas_json_content[expected_schema_key]["columns_map"].keys()) # Use schemas_json_content
@@ -627,12 +628,13 @@ def test_parse_zip_with_utf8_csv_matching_weekly_report(file_parser_instance, tm
     assert item_result[constants.KEY_TABLE] == expected_db_table_name
     assert item_result[constants.KEY_COUNT] == 2 # Number of data rows
 
-    parquet_path_str = item_result[constants.KEY_PATH]
-    assert parquet_path_str is not None
-    parquet_file = Path(parquet_path_str)
-    assert parquet_file.exists()
+    # Parquet file is not written by FileParser anymore
+    # parquet_path_str = item_result[constants.KEY_PATH]
+    # assert parquet_path_str is not None
+    # parquet_file = Path(parquet_path_str)
+    # assert parquet_file.exists()
 
-    df = pd.read_parquet(parquet_file)
+    df = item_result.get(constants.KEY_DATAFRAME) # Check the DataFrame from the result
     assert df.shape[0] == 2
 
     expected_cols = list(schemas_json_content[expected_schema_key]["columns_map"].keys()) # Use schemas_json_content
@@ -652,14 +654,23 @@ def test_staging_dir_usage(file_parser_instance, normal_utf8_csv_path, tmp_path)
     result = file_parser_instance.parse_file(str(normal_utf8_csv_path), str(custom_staging_dir)) # schemas_json_content removed
 
     assert result[constants.KEY_STATUS] == constants.STATUS_SUCCESS
-    parquet_path_str = result[constants.KEY_PATH]
-    assert parquet_path_str is not None
-    parquet_file = Path(parquet_path_str)
+    # KEY_PATH is None, DataFrame is checked instead
+    # parquet_path_str = result[constants.KEY_PATH]
+    # assert parquet_path_str is not None
+    # parquet_file = Path(parquet_path_str)
 
-    # Check the parquet file is inside the custom_staging_dir structure
-    # <custom_staging_dir>/<schema_name>/<hash>.parquet
-    assert parquet_file.parent.parent == custom_staging_dir
-    assert parquet_file.exists()
+    # # Check the parquet file is inside the custom_staging_dir structure
+    # # <custom_staging_dir>/<schema_name>/<hash>.parquet
+    # assert parquet_file.parent.parent == custom_staging_dir
+    # assert parquet_file.exists()
+    assert result.get(constants.KEY_PATH) is None, "KEY_PATH should be None as FileParser no longer writes Parquet."
+    df_read = result.get(constants.KEY_DATAFRAME)
+    assert df_read is not None, "DataFrame should be present in the result."
+    # Basic check that df has content if expected
+    if result[constants.KEY_COUNT] > 0:
+        assert not df_read.empty
+    else:
+        assert df_read.empty # Or check specific schema columns if count is 0
 
 # (Further tests could be added for more nuanced schema interactions if needed)
 
@@ -690,7 +701,8 @@ def test_parse_single_csv_weekly_report_big5_direct(file_parser_instance, weekly
     expected_cols = list(schemas_json_content[expected_schema_key]["columns_map"].keys()) # Use schemas_json_content for verification
     check_parquet_output(result, expected_schema_key, expected_db_table_name, 2, tmp_path, expected_cols)
 
-    df = pd.read_parquet(result[constants.KEY_PATH])
+    df = result.get(constants.KEY_DATAFRAME) # Check the DataFrame from the result
+    assert df is not None
     assert df.loc[0, "trading_date"] == "2023/11/01" # Mapped from "日期"
     assert df.loc[0, "product_name"] == "臺股期貨"   # Mapped from "商品名稱"
     assert df.loc[0, "investor_type"] == "投信"    # Mapped from "身份別"

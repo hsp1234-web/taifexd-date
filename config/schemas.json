@@ -198,8 +198,5 @@
             "source_file": {"db_type": "VARCHAR"}
         },
         "required_columns": ["quarantine_reason", "source_file"]
-        // Primary key for quarantine table can be considered later if needed.
-        // For example: "primary_key": ["source_file", "original_row_hash"] (if hash is generated)
-        // Or simply allow duplicates for now.
     }
 }
