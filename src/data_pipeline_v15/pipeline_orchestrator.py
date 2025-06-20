@@ -26,6 +26,7 @@ from .core.constants import (
     STATUS_SKIPPED,
 )
 from .core import constants  # Added to allow access to constants like constants.KEY_STATUS
+from .data_transformer import DataTransformer # Added for new transformation stage
 from .database_loader import DatabaseLoader
 from .file_parser import FileParser
 from .manifest_manager import ManifestManager
@@ -215,6 +216,10 @@ class PipelineOrchestrator:
         # Initialize Validator
         validation_rules = self.config.get("validation_rules", {})
         self.validator = Validator(validation_rules, self.logger)
+
+        # Initialize DataTransformer
+        self.data_transformer = DataTransformer(db_path=str(self.local_database_file))
+        self.logger.info(f"DataTransformer initialized with DB path: {self.local_database_file}")
 
         # Initialize report_stats
         self.report_stats = {
@@ -624,6 +629,18 @@ class PipelineOrchestrator:
                 )
                 self.logger.info(f"--- 檔案 '{filename}' 處理完畢。最終狀態: {final_overall_status_for_file} ---")
             self.logger.info("所有檔案解析結果處理完成。")
+
+            # --- Data Transformation Stage ---
+            self.logger.info("--- 開始數據轉換階段 ---")
+            try:
+                with self.data_transformer as transformer:
+                    transformer.transform_data()
+                self.logger.info("✅ 數據轉換階段成功完成。")
+            except Exception as e_transform:
+                self.logger.error(f"數據轉換階段發生錯誤: {e_transform}", exc_info=True)
+                # Decide if this error should be critical to the pipeline
+                # For now, logging the error and continuing.
+            self.logger.info("--- 數據轉換階段結束 ---")
 
             # Cleanup temp intermediate parquets dir
             temp_intermediate_parquets_dir = self.local_project_path / "temp_intermediate_parquets"
