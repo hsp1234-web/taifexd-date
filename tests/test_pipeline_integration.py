@@ -8,8 +8,9 @@ import duckdb  # For DB verification
 # 從 src 目錄匯入 PipelineOrchestrator 和相關常數
 # (假設 PipelineOrchestrator 在 src/data_pipeline_v15/pipeline_orchestrator.py)
 # (假設 constants 在 src/data_pipeline_v15/core/constants.py)
-from src.data_pipeline_v15.pipeline_orchestrator import PipelineOrchestrator
-from src.data_pipeline_v15.core import constants as pipeline_constants
+from data_pipeline_v15.pipeline_orchestrator import PipelineOrchestrator
+from data_pipeline_v15.core import constants as pipeline_constants
+from data_pipeline_v15.utils.logger import CustomJsonFormatter # Import the formatter
 import pathlib  # Make sure pathlib is imported
 
 
@@ -27,8 +28,13 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
     端到端整合測試. 模擬 PipelineOrchestrator 的完整執行流程
     (本地優先工作流程).
     """
+    # Define names for test outputs
+    test_db_name = "test_integration_db.duckdb"
+    test_log_name = "test_integration_pipeline.log"
+
     # Set capture level for caplog if needed, default is WARNING
-    caplog.set_level(logging.INFO)
+    # Ensure caplog captures from the specific logger used by the orchestrator
+    caplog.set_level(logging.INFO, logger=test_log_name.split('.')[0])
     # Set to INFO to capture the summary report
 
     # --- 1. 準備臨時的 config.yaml ---
@@ -48,8 +54,6 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
         "db": "98_database_test",
         "log": "99_logs_test"
     }
-    test_db_name = "test_integration_db.duckdb"
-    test_log_name = "test_integration_pipeline.log"
 
     config_data = {
         "project_folder": test_project_folder_name,
@@ -120,8 +124,8 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
             "input_filename": "daily_no_keywords.csv",
             "outcome": pipeline_constants.STATUS_ERROR,
             "reason_contains": (
-                "欄位重命名後. 檔案 'daily_no_keywords.csv' 內容與 schema "
-                "'default_daily' 的目標欄位不符"
+                    "欄位重命名後，檔案 'daily_no_keywords.csv' 內容與 schema "
+                    "'default_daily' 的目標欄位不符。"
             ),
             "in_quarantine": True
         },
@@ -145,8 +149,8 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
             "input_filename": "completely_unidentifiable.csv",
             "outcome": pipeline_constants.STATUS_ERROR,
             "reason_contains": (
-                "欄位重命名後. 檔案 'completely_unidentifiable.csv' "
-                "內容與 schema 'default_daily' 的目標欄位不符"
+                    "欄位重命名後，檔案 'completely_unidentifiable.csv' "
+                    "內容與 schema 'default_daily' 的目標欄位不符。"
             ),
             "in_quarantine": True
         },
@@ -226,8 +230,8 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
     expected_local_project_path_in_workspace = (
         local_workspace_root_path / test_project_folder_name
     )
-    assert not expected_local_project_path_in_workspace.exists(), (
-        f"本地工作區專案資料夾 {expected_local_project_path_in_workspace} 應已被清理"
+    assert expected_local_project_path_in_workspace.exists(), (
+        f"本地工作區專案資料夾 {expected_local_project_path_in_workspace} 應存在 (因 debug_mode=True)"
     )
 
     # Verify manifest on simulated remote
@@ -273,24 +277,36 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
 
             # Verify file movement to simulated remote processed/quarantine
             if expectation.get("in_processed"):
-                assert not (
-                    simulated_remote_input_dir / input_filename
-                ).exists(), (
-                    f"檔案 {input_filename} 應已從模擬遠端 Input 移出 "
-                    "(或在本地處理後未同步回Input)"
-                )
+                if not orchestrator.debug_mode:  # In non-debug, file is moved from remote input
+                    assert not (
+                        simulated_remote_input_dir / input_filename
+                    ).exists(), (
+                        f"檔案 {input_filename} 應已從模擬遠端 Input 移出 (非 debug mode)"
+                    )
+                else: # In debug mode, original file remains in remote input
+                    assert (
+                        simulated_remote_input_dir / input_filename
+                    ).exists(), (
+                        f"檔案 {input_filename} 應保留在模擬遠端 Input (debug mode)"
+                    )
                 assert (
                     simulated_remote_processed_dir / input_filename
                 ).exists(), (
                     f"檔案 {input_filename} 應已同步至模擬遠端 processed"
                 )
             elif expectation.get("in_quarantine"):
-                assert not (
-                    simulated_remote_input_dir / input_filename
-                ).exists(), (
-                    f"檔案 {input_filename} 應已從模擬遠端 Input 移出 "
-                    "(或在本地處理後未同步回Input)"
-                )
+                if not orchestrator.debug_mode: # In non-debug, file is moved from remote input
+                    assert not (
+                        simulated_remote_input_dir / input_filename
+                    ).exists(), (
+                        f"檔案 {input_filename} 應已從模擬遠端 Input 移出 (非 debug mode)"
+                    )
+                else: # In debug mode, original file remains in remote input
+                    assert (
+                        simulated_remote_input_dir / input_filename
+                    ).exists(), (
+                        f"檔案 {input_filename} 應保留在模擬遠端 Input (debug mode)"
+                    )
                 assert (
                     simulated_remote_quarantine_dir / input_filename
                 ).exists(), (
@@ -467,59 +483,70 @@ def test_pipeline_full_run(tmp_path, caplog):  # Added caplog fixture
     assert simulated_remote_archive_dir.exists()
     assert simulated_remote_db_dir.exists()
 
-    # --- 5. 驗證 JSON 日誌和執行摘要報告 ---
+    # --- 5. 驗證 JSON 日誌和執行摘要報告 (從日誌檔案讀取) ---
     summary_report_log_record = None
-    found_json_logs = 0
+    found_json_logs_in_file = 0
+
+    # Print the content of the log file for debugging
+    log_file_to_check_for_debug = orchestrator.local_log_path / orchestrator.log_name
+    if log_file_to_check_for_debug.exists():
+        print(f"DEBUG: Log file content of {log_file_to_check_for_debug}:")
+        print(log_file_to_check_for_debug.read_text(encoding='utf-8'))
+    else:
+        print(f"DEBUG: Log file {log_file_to_check_for_debug} does not exist.")
+
     expected_json_fields = [
         'timestamp', 'level', 'message', 'logger_name',
         'module', 'funcName', 'lineno'
     ]
 
-    for record in caplog.records:
-        log_message_obj = None
-        # Filter for logs from our orchestrator's logger
-        if record.name == test_log_name.split('.')[0]:
-            try:
-                # The CustomJsonFormatter should ensure record.message is the
-                # final JSON string. However, if logger.info(dict) was called,
-                # record.msg might be the dict. Let's check record.msg first
-                # if it's a dict (for our summary report)
-                if isinstance(record.msg, dict):
-                    log_message_obj = record.msg
-                else:
-                    # For regular string logs formatted into JSON by the formatter
-                    log_message_obj = json.loads(record.message)
+    # Construct the log file path from orchestrator's attributes
+    log_file_to_check = orchestrator.local_log_path / orchestrator.log_name
+    assert log_file_to_check.exists(), \
+        f"Log file should exist at {log_file_to_check}"
 
-                found_json_logs += 1
+    log_lines = log_file_to_check.read_text(encoding='utf-8').strip().split('\n')
+    assert len(log_lines) > 0, "Log file is empty."
+
+    for line in log_lines:
+        if not line.strip(): # Skip empty lines if any
+            continue
+        try:
+            log_message_obj = json.loads(line)
+            found_json_logs_in_file += 1
+
+            # Check standard fields for all JSON logs from this logger
+            if log_message_obj.get("logger_name") == test_log_name.split('.')[0]:
                 for field in expected_json_fields:
                     assert field in log_message_obj, (
-                        f"Expected field '{field}' not in JSON log: "
-                        f"{log_message_obj}"
+                        f"Expected field '{field}' not in JSON log line: {line}"
                     )
 
-                if (isinstance(log_message_obj, dict) and
-                        log_message_obj.get("event_type") ==
-                        "execution_summary_report"):
-                    summary_report_log_record = log_message_obj  # It's already a dict  # noqa: E501
-            except json.JSONDecodeError:
-                # This might happen for non-JSON string logs if any are
-                # produced by other libraries or if our formatter failed
-                # for some reason.
-                print(
-                    f"WARNING: Non-JSON log message encountered: {record.message}"  # noqa: E501
-                )
-                # Allow non-JSON logs from other sources,
-                # but our main ones should be JSON.
-                pass
+            if (log_message_obj.get("logger_name") == test_log_name.split('.')[0] and
+                    log_message_obj.get("event_type") == "execution_summary_report"):
+                summary_report_log_record = log_message_obj
+                # The summary data itself is nested
+                # summary_report_log_record = log_message_obj.get("summary_data")
+                # No, the whole log_message_obj is the summary record if event_type matches
 
-    assert found_json_logs > 0, \
-        "No JSON formatted log messages were captured from the main logger."
+        except json.JSONDecodeError:
+            print(f"WARNING: Non-JSON line in log file: {line}")
+            # Depending on strictness, you might want to fail here
+            # For now, allow other non-JSON lines, but our main ones should be JSON.
+            pass
+
+    assert found_json_logs_in_file > 0, \
+        "No JSON formatted log messages were found in the log file."
     assert summary_report_log_record is not None, \
-        "Execution summary report not found in logs."
+        "Execution summary report not found in log file."
 
-    report_data = summary_report_log_record.get("summary_data")
+    # The summary_report_log_record *is* the summary data because of how CustomJsonFormatter handles dicts
+    # If record.msg is a dict, it updates the main log_object with its keys.
+    # The keys from self.report_stats (which was passed as record.msg) are at the top level
+    # of summary_report_log_record.
+    report_data = summary_report_log_record # summary_report_log_record itself is the report data dict
     assert isinstance(report_data, dict), \
-        "summary_data in report is not a dictionary."
+        f"The summary_report_log_record itself should be a dictionary. Report: {summary_report_log_record}"
 
     # Verify report_data structure and content
     expected_report_keys = [
